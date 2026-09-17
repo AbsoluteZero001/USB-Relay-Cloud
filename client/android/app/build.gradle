@@ -1,0 +1,117 @@
+apply plugin: 'com.android.application'
+apply plugin: 'kotlin-android'
+
+def packageJsonFile = file('../../package.json')
+def packageJson = new groovy.json.JsonSlurper().parseText(packageJsonFile.text)
+def versionMatcher = packageJson.version =~ /^(\d+)\.(\d+)\.(\d+)$/
+if (!versionMatcher.matches()) {
+    throw new GradleException(
+        "package.json version must use semantic versioning: ${packageJson.version}"
+    )
+}
+
+def versionMajor = versionMatcher.group(1) as int
+def versionMinor = versionMatcher.group(2) as int
+def versionPatch = versionMatcher.group(3) as int
+if (versionMinor > 99 || versionPatch > 99) {
+    throw new GradleException(
+        "Android versionCode mapping supports minor and patch values from 0 to 99"
+    )
+}
+
+def androidVersionCode =
+    (versionMajor * 10000) + (versionMinor * 100) + versionPatch
+def androidVersionName = packageJson.version.toString()
+
+def keystorePropertiesFile = rootProject.file('keystore.properties')
+def keystoreProperties = new Properties()
+if (keystorePropertiesFile.exists()) {
+    keystorePropertiesFile.withInputStream { stream ->
+        keystoreProperties.load(stream)
+    }
+    def requiredSigningProperties = [
+        'storeFile',
+        'storePassword',
+        'keyAlias',
+        'keyPassword',
+    ]
+    def missingProperties = requiredSigningProperties.findAll {
+        !keystoreProperties.getProperty(it)
+    }
+    if (!missingProperties.isEmpty()) {
+        throw new GradleException(
+            "keystore.properties is missing: ${missingProperties.join(', ')}"
+        )
+    }
+}
+
+android {
+    namespace = "com.absolutezero.usbrelaycloud"
+    compileSdk = rootProject.ext.compileSdkVersion
+    defaultConfig {
+        applicationId "com.absolutezero.usbrelaycloud"
+        minSdkVersion rootProject.ext.minSdkVersion
+        targetSdkVersion rootProject.ext.targetSdkVersion
+        versionCode androidVersionCode
+        versionName androidVersionName
+        testInstrumentationRunner "androidx.test.runner.AndroidJUnitRunner"
+        aaptOptions {
+             // Files and dirs to omit from the packaged assets dir, modified to accommodate modern web apps.
+             // Default: https://android.googlesource.com/platform/frameworks/base/+/282e181b58cf72b6ca770dc7ca5f91f135444502/tools/aapt/AaptAssets.cpp#61
+            ignoreAssetsPattern = '!.svn:!.git:!.ds_store:!*.scc:.*:!CVS:!thumbs.db:!picasa.ini:!*~'
+        }
+    }
+    signingConfigs {
+        if (keystorePropertiesFile.exists()) {
+            release {
+                storeFile rootProject.file(
+                    keystoreProperties.getProperty('storeFile')
+                )
+                storePassword keystoreProperties.getProperty('storePassword')
+                keyAlias keystoreProperties.getProperty('keyAlias')
+                keyPassword keystoreProperties.getProperty('keyPassword')
+            }
+        }
+    }
+    buildTypes {
+        release {
+            if (keystorePropertiesFile.exists()) {
+                signingConfig signingConfigs.release
+            }
+            // USB serial drivers are instantiated reflectively; keep R8 off until
+            // a release build has passed real Android USB hardware testing.
+            minifyEnabled false
+            proguardFiles getDefaultProguardFile('proguard-android.txt'), 'proguard-rules.pro'
+        }
+    }
+}
+
+repositories {
+    flatDir{
+        dirs '../capacitor-cordova-android-plugins/src/main/libs', 'libs'
+    }
+}
+
+dependencies {
+    implementation fileTree(include: ['*.jar'], dir: 'libs')
+    implementation "androidx.appcompat:appcompat:$androidxAppCompatVersion"
+    implementation "androidx.coordinatorlayout:coordinatorlayout:$androidxCoordinatorLayoutVersion"
+    implementation "androidx.core:core-splashscreen:$coreSplashScreenVersion"
+    implementation project(':capacitor-android')
+    implementation 'com.github.mik3y:usb-serial-for-android:3.9.0'
+    testImplementation "junit:junit:$junitVersion"
+    androidTestImplementation "androidx.test.ext:junit:$androidxJunitVersion"
+    androidTestImplementation "androidx.test.espresso:espresso-core:$androidxEspressoCoreVersion"
+    implementation project(':capacitor-cordova-android-plugins')
+}
+
+apply from: 'capacitor.build.gradle'
+
+try {
+    def servicesJSON = file('google-services.json')
+    if (servicesJSON.text) {
+        apply plugin: 'com.google.gms.google-services'
+    }
+} catch(Exception e) {
+    logger.info("google-services.json not found, google-services plugin not applied. Push Notifications won't work")
+}

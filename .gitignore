@@ -1,0 +1,42 @@
+# Environment and secrets
+.env
+.env.*
+!.env.example
+*.jks
+*.keystore
+keystore.properties
+local.properties
+
+# Java
+server/target/
+*.class
+*.log
+
+# Node
+client/node_modules/
+client/dist/
+client/dist-electron/
+client/release/
+client/coverage/
+client/.vite/
+client/.vitest/
+
+# Capacitor / Android
+client/android/.gradle/
+client/android/build/
+client/android/app/build/
+client/android/capacitor-cordova-android-plugins/
+client/android/local.properties
+client/android/keystore.properties
+
+# Editors and OS files
+.idea/
+.vscode/
+*.iml
+.DS_Store
+Thumbs.db
+
+# Local runtime
+deploy/mysql-data/
+deploy/logs/
+.runtime/

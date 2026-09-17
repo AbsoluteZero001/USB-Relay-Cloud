@@ -1,0 +1,12 @@
+.git
+.github
+.idea
+.vscode
+**/node_modules
+**/dist
+**/target
+**/build
+**/.gradle
+client/android/app/src/main/assets/public
+deploy/.env
+*.log
