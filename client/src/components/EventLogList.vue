@@ -1,9 +1,9 @@
 <script setup lang="ts">
-import { ArrowRight, History, Radio } from "@lucide/vue";
-import { computed } from "vue";
+import {ArrowRight, History, Radio} from "@lucide/vue";
+import {computed} from "vue";
 
-import type { RelayEvent } from "@/types/api";
-import { formatDateTime, sourceLabel } from "@/utils/format";
+import type {RelayEvent} from "@/types/api";
+import {commandStatusLabel, formatDateTime, sourceLabel,} from "@/utils/format";
 
 const props = withDefaults(
   defineProps<{
@@ -42,8 +42,8 @@ const visibleEvents = computed(() =>
           </strong>
         </div>
         <span>
-          {{ sourceLabel(event.source) }} · Relay {{ event.channel }} ·
-          {{ event.commandStatus }}
+          {{ sourceLabel(event.source) }} · 通道 {{ event.channel }} ·
+          {{ commandStatusLabel(event.commandStatus) }}
         </span>
       </div>
       <time :datetime="event.createdAt">

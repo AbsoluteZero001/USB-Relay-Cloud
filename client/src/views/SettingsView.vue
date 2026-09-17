@@ -1,24 +1,33 @@
 <script setup lang="ts">
-import {
-  Cloud,
-  Cpu,
-  HeartPulse,
-  ShieldCheck,
-  Usb,
-} from "@lucide/vue";
-import { computed, reactive, ref } from "vue";
+import {Cloud, Cpu, HeartPulse, RotateCcw, Save, ShieldCheck, Usb, Wifi,} from "@lucide/vue";
+import {computed, reactive, ref} from "vue";
 
-import { getApiErrorMessage } from "@/api/http";
-import { relayService } from "@/services/relay";
-import { useConnectionStore } from "@/stores/connectionStore";
-import { useDeviceStore } from "@/stores/deviceStore";
+import {fetchDevices} from "@/api/deviceApi";
+import {getApiErrorMessage} from "@/api/http";
+import {
+  clearConfiguredServerBaseUrl,
+  getApiBaseUrl,
+  getConfiguredServerBaseUrl,
+  getWebSocketBaseUrl,
+  saveConfiguredServerBaseUrl,
+} from "@/config/runtimeConfig";
+import {relayService} from "@/services/relay";
+import {relayWebSocket} from "@/services/websocket";
+import {useConnectionStore} from "@/stores/connectionStore";
+import {useDeviceStore} from "@/stores/deviceStore";
+import {useEventStore} from "@/stores/eventStore";
+import {webSocketStatusLabel} from "@/utils/format";
 
 const connectionStore = useConnectionStore();
 const deviceStore = useDeviceStore();
+const eventStore = useEventStore();
 const runtime = relayService.getRuntime();
 const saving = ref(false);
+const testing = ref(false);
 const message = ref<string | null>(null);
 const error = ref<string | null>(null);
+const configVersion = ref(0);
+const serverBaseUrl = ref(getConfiguredServerBaseUrl());
 const form = reactive({
   deviceId: "relay-001",
   deviceName: "Relay-001",
@@ -26,8 +35,60 @@ const form = reactive({
   clientId: "web-console-001",
 });
 
-const apiBaseUrl = computed(() => import.meta.env.VITE_API_BASE_URL);
-const wsBaseUrl = computed(() => import.meta.env.VITE_WS_BASE_URL);
+const apiBaseUrl = computed(() => {
+  void configVersion.value;
+  return getApiBaseUrl();
+});
+const wsBaseUrl = computed(() => {
+  void configVersion.value;
+  return getWebSocketBaseUrl();
+});
+
+function reconnectRealtime(): void {
+  relayWebSocket.disconnect();
+  relayWebSocket.connect(eventStore.latestSequence);
+}
+
+async function saveServerAddress(): Promise<void> {
+  saving.value = true;
+  message.value = null;
+  error.value = null;
+  try {
+    serverBaseUrl.value =
+        saveConfiguredServerBaseUrl(serverBaseUrl.value);
+    configVersion.value += 1;
+    reconnectRealtime();
+    await deviceStore.loadDevices();
+    message.value = "服务器地址已保存，实时连接正在重新建立";
+  } catch (caught) {
+    error.value = getApiErrorMessage(caught);
+  } finally {
+    saving.value = false;
+  }
+}
+
+async function restoreDefaultServerAddress(): Promise<void> {
+  clearConfiguredServerBaseUrl();
+  serverBaseUrl.value = "";
+  configVersion.value += 1;
+  reconnectRealtime();
+  await deviceStore.loadDevices();
+  message.value = "已恢复构建时的默认服务器地址";
+}
+
+async function testCloudConnection(): Promise<void> {
+  testing.value = true;
+  message.value = null;
+  error.value = null;
+  try {
+    const page = await fetchDevices();
+    message.value = `连接成功，读取到 ${page.total} 个设备`;
+  } catch (caught) {
+    error.value = getApiErrorMessage(caught);
+  } finally {
+    testing.value = false;
+  }
+}
 
 async function heartbeat(): Promise<void> {
   saving.value = true;
@@ -53,26 +114,110 @@ async function heartbeat(): Promise<void> {
   <div class="settings-page">
     <section class="settings-section">
       <div class="settings-icon">
+        <Cloud :size="20"/>
+      </div>
+      <div class="settings-content">
+        <span class="section-kicker">云端连接</span>
+        <h2>服务器地址</h2>
+        <label class="field-group">
+          <span>服务器根地址</span>
+          <input
+              v-model.trim="serverBaseUrl"
+              placeholder="例如：https://relay.example.com"
+          />
+        </label>
+        <p class="inline-note">
+          留空时使用构建配置。Android APK 必须填写可访问的
+          HTTPS/WSS 服务器地址。
+        </p>
+        <div class="button-row">
+          <button
+              class="button button-primary"
+              type="button"
+              :disabled="saving"
+              @click="saveServerAddress"
+          >
+            <Save :size="16"/>
+            保存并重连
+          </button>
+          <button
+              class="button button-secondary"
+              type="button"
+              :disabled="testing"
+              @click="testCloudConnection"
+          >
+            <Wifi :size="16"/>
+            测试连接
+          </button>
+          <button
+              class="button button-secondary"
+              type="button"
+              @click="restoreDefaultServerAddress"
+          >
+            <RotateCcw :size="16"/>
+            恢复默认
+          </button>
+        </div>
+
+        <dl class="settings-list">
+          <div>
+            <dt>REST API</dt>
+            <dd>{{ apiBaseUrl }}</dd>
+          </div>
+          <div>
+            <dt>WebSocket</dt>
+            <dd>{{ wsBaseUrl }}</dd>
+          </div>
+          <div>
+            <dt>实时连接状态</dt>
+            <dd>
+              {{
+                webSocketStatusLabel(
+                    connectionStore.webSocketStatus,
+                )
+              }}
+            </dd>
+          </div>
+          <div>
+            <dt>最近实时消息</dt>
+            <dd>
+              {{
+                connectionStore.lastWebSocketMessageAt
+                    ? new Date(
+                        connectionStore.lastWebSocketMessageAt,
+                    ).toLocaleString("zh-CN", {hour12: false})
+                    : "—"
+              }}
+            </dd>
+          </div>
+        </dl>
+        <p v-if="message" class="inline-note success">{{ message }}</p>
+        <p v-if="error" class="inline-note error">{{ error }}</p>
+      </div>
+    </section>
+
+    <section class="settings-section">
+      <div class="settings-icon">
         <Cpu :size="20" />
       </div>
       <div class="settings-content">
-        <span class="section-kicker">Device registration</span>
-        <h2>Heartbeat</h2>
+        <span class="section-kicker">设备注册</span>
+        <h2>心跳上报</h2>
         <div class="form-grid">
           <label>
-            <span>Device ID</span>
+            <span>设备 ID</span>
             <input v-model.trim="form.deviceId" />
           </label>
           <label>
-            <span>Device Name</span>
+            <span>设备名称</span>
             <input v-model.trim="form.deviceName" />
           </label>
           <label>
-            <span>Device Type</span>
+            <span>设备类型</span>
             <input v-model.trim="form.deviceType" />
           </label>
           <label>
-            <span>Client ID</span>
+            <span>客户端 ID</span>
             <input v-model.trim="form.clientId" />
           </label>
         </div>
@@ -90,47 +235,9 @@ async function heartbeat(): Promise<void> {
             @click="heartbeat"
           >
             <HeartPulse :size="16" />
-            Send Heartbeat
+            发送心跳
           </button>
         </div>
-        <p v-if="message" class="inline-note success">{{ message }}</p>
-        <p v-if="error" class="inline-note error">{{ error }}</p>
-      </div>
-    </section>
-
-    <section class="settings-section">
-      <div class="settings-icon">
-        <Cloud :size="20" />
-      </div>
-      <div class="settings-content">
-        <span class="section-kicker">Connection</span>
-        <h2>Cloud endpoints</h2>
-        <dl class="settings-list">
-          <div>
-            <dt>REST API</dt>
-            <dd>{{ apiBaseUrl }}</dd>
-          </div>
-          <div>
-            <dt>WebSocket</dt>
-            <dd>{{ wsBaseUrl }}</dd>
-          </div>
-          <div>
-            <dt>Realtime status</dt>
-            <dd>{{ connectionStore.webSocketStatus }}</dd>
-          </div>
-          <div>
-            <dt>Last realtime message</dt>
-            <dd>
-              {{
-                connectionStore.lastWebSocketMessageAt
-                  ? new Date(
-                      connectionStore.lastWebSocketMessageAt,
-                    ).toLocaleString("zh-CN", { hour12: false })
-                  : "—"
-              }}
-            </dd>
-          </div>
-        </dl>
       </div>
     </section>
 
@@ -139,26 +246,26 @@ async function heartbeat(): Promise<void> {
         <Usb :size="20" />
       </div>
       <div class="settings-content">
-        <span class="section-kicker">Local runtime</span>
-        <h2>Relay adapter</h2>
+        <span class="section-kicker">本地运行环境</span>
+        <h2>继电器适配器</h2>
         <dl class="settings-list">
           <div>
-            <dt>Runtime</dt>
+            <dt>运行平台</dt>
             <dd>{{ runtime }}</dd>
           </div>
           <div>
-            <dt>Local control</dt>
+            <dt>本地控制</dt>
             <dd>
               {{
                 relayService.isLocalControlSupported()
-                  ? "available"
-                  : "unavailable"
+                    ? "可用"
+                    : "不可用"
               }}
             </dd>
           </div>
           <div>
-            <dt>Hardware state</dt>
-            <dd>UNKNOWN</dd>
+            <dt>硬件状态</dt>
+            <dd>未知（UNKNOWN）</dd>
           </div>
         </dl>
       </div>
@@ -169,10 +276,10 @@ async function heartbeat(): Promise<void> {
         <ShieldCheck :size="20" />
       </div>
       <div class="settings-content">
-        <span class="section-kicker">Safety boundary</span>
-        <h2>LCUS-1</h2>
+        <span class="section-kicker">安全边界</span>
+        <h2>LCUS-1 状态说明</h2>
         <p class="settings-copy">
-          串口写入成功仅表示 commandedState 已发送。当前没有经过验证的
+          串口写入成功只表示 commandedState 已发送。当前没有经过验证的
           LCUS-1 硬件状态回读协议，因此 hardwareState 始终为 UNKNOWN。
         </p>
       </div>

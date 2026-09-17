@@ -1,7 +1,9 @@
-import { RelayWebSocketClient } from "./RelayWebSocketClient";
+import {RelayWebSocketClient} from "./RelayWebSocketClient";
+
+import {getWebSocketBaseUrl} from "@/config/runtimeConfig";
 
 export const relayWebSocket = new RelayWebSocketClient(
-  import.meta.env.VITE_WS_BASE_URL,
+    getWebSocketBaseUrl,
 );
 
 export { RelayWebSocketClient } from "./RelayWebSocketClient";

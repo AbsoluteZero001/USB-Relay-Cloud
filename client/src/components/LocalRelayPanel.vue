@@ -1,24 +1,11 @@
 <script setup lang="ts">
-import {
-  Cable,
-  PlugZap,
-  Power,
-  PowerOff,
-  RefreshCw,
-  Usb,
-} from "@lucide/vue";
-import { computed, onBeforeUnmount, onMounted, ref } from "vue";
+import {Cable, PlugZap, Power, PowerOff, RefreshCw, Usb,} from "@lucide/vue";
+import {computed, onBeforeUnmount, onMounted, ref} from "vue";
 
-import { getApiErrorMessage } from "@/api/http";
-import { relayService } from "@/services/relay";
-import type {
-  RelayAction,
-  RelayExecutionResult,
-} from "@/types/api";
-import type {
-  SerialPortInfo,
-  SerialStatus,
-} from "@/services/relay/serial/types";
+import {getApiErrorMessage} from "@/api/http";
+import {relayService} from "@/services/relay";
+import type {RelayAction, RelayExecutionResult,} from "@/types/api";
+import type {SerialPortInfo, SerialStatus,} from "@/services/relay/serial/types";
 
 const props = defineProps<{
   deviceId: string | null;
@@ -142,15 +129,15 @@ onBeforeUnmount(() => {
   <section class="local-panel">
     <div class="panel-heading">
       <div>
-        <span class="section-kicker">Local hardware</span>
-        <h2>USB Relay</h2>
+        <span class="section-kicker">本地硬件</span>
+        <h2>USB 继电器</h2>
       </div>
       <span
         class="status-badge"
         :class="connected ? 'online' : 'offline'"
       >
         <Usb :size="14" />
-        {{ connected ? "Connected" : "Disconnected" }}
+        {{ connected ? "已连接" : "未连接" }}
       </span>
     </div>
 
@@ -160,7 +147,7 @@ onBeforeUnmount(() => {
 
     <template v-else>
       <label class="field-group">
-        <span>Serial port</span>
+        <span>串口设备</span>
         <select v-model="selectedPort" :disabled="connected || busy">
           <option value="" disabled>选择串口</option>
           <option
@@ -213,7 +200,7 @@ onBeforeUnmount(() => {
           @click="execute('OFF')"
         >
           <PowerOff :size="17" />
-          Relay OFF
+          继电器 OFF
         </button>
         <button
           class="button button-on"
@@ -222,7 +209,7 @@ onBeforeUnmount(() => {
           @click="execute('ON')"
         >
           <Power :size="17" />
-          Relay ON
+          继电器 ON
         </button>
       </div>
 
@@ -232,7 +219,7 @@ onBeforeUnmount(() => {
         {{ cloudNotice }}
       </p>
       <p class="inline-note">
-        Hardware State 固定为 UNKNOWN，LCUS-1 无已验证的状态回读协议。
+        硬件状态固定为 UNKNOWN，LCUS-1 无已验证的状态回读协议。
       </p>
     </template>
   </section>

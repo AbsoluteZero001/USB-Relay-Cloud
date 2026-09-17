@@ -1,11 +1,6 @@
-import {
-  parseRelayWebSocketMessage,
-} from "./message";
+import {parseRelayWebSocketMessage,} from "./message";
 
-import type {
-  RelayWebSocketMessage,
-  WebSocketStatus,
-} from "@/types/api";
+import type {RelayWebSocketMessage, WebSocketStatus,} from "@/types/api";
 
 type MessageListener = (message: RelayWebSocketMessage) => void;
 type StatusListener = (status: WebSocketStatus) => void;
@@ -23,7 +18,10 @@ export class RelayWebSocketClient {
   private readonly messageListeners = new Set<MessageListener>();
   private readonly statusListeners = new Set<StatusListener>();
 
-  constructor(private readonly baseUrl: string) {}
+    constructor(
+        private readonly baseUrl: string | (() => string),
+    ) {
+    }
 
   connect(afterSequence = 0): void {
     this.intentionallyClosed = false;
@@ -135,10 +133,12 @@ export class RelayWebSocketClient {
   }
 
   private buildUrl(afterSequence: number): string {
-    const resolved = this.baseUrl.startsWith("ws://") ||
-      this.baseUrl.startsWith("wss://")
-      ? new URL(this.baseUrl)
-      : new URL(this.baseUrl, window.location.origin);
+      const baseUrl =
+          typeof this.baseUrl === "function" ? this.baseUrl() : this.baseUrl;
+      const resolved = baseUrl.startsWith("ws://") ||
+      baseUrl.startsWith("wss://")
+          ? new URL(baseUrl)
+          : new URL(baseUrl, window.location.origin);
     resolved.searchParams.set("afterSequence", String(afterSequence));
     return resolved.toString();
   }

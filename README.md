@@ -338,6 +338,10 @@ ws://host:8080/ws/relay?afterSequence=123
 
 Android 工程位于 `client/android`。
 
+重要：旧版 `USB-Relay-Android` APK 只执行本地 USB 控制，不上传
+Cloud。只有使用新 `USB-Relay-Cloud` 客户端构建的 APK 才会在串口写入
+成功后上传事件并接收 WebSocket 实时更新。
+
 同步步骤：
 
 ```powershell
@@ -361,6 +365,21 @@ Android 迁移保留：
 - Base64 原生字节传输
 - 设备拔出事件
 - 已实机验证的 LCUS-1 ON/OFF 字节
+
+新 APK 首次打开后，在“设置 -> 服务器地址”填写部署地址，例如：
+
+```text
+https://relay.example.com
+```
+
+客户端会自动使用：
+
+```text
+https://relay.example.com/api
+wss://relay.example.com/ws/relay
+```
+
+Debug 构建允许局域网 HTTP 调试；Release 构建要求 HTTPS/WSS。
 
 当前 Android 代码尚未在本仓库完成真实 USB OTG + CH340 + LCUS-1
 实机控制验证。

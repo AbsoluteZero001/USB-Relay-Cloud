@@ -1,17 +1,11 @@
 <script setup lang="ts">
-import {
-  Cpu,
-  LayoutDashboard,
-  ScrollText,
-  Settings,
-  RadioTower,
-} from "@lucide/vue";
-import { computed } from "vue";
-import { RouterLink, RouterView, useRoute } from "vue-router";
+import {Cpu, LayoutDashboard, RadioTower, ScrollText, Settings,} from "@lucide/vue";
+import {computed} from "vue";
+import {RouterLink, RouterView, useRoute} from "vue-router";
 
 import ConnectionBadge from "@/components/ConnectionBadge.vue";
-import { useDeviceStore } from "@/stores/deviceStore";
-import { onlineLabel } from "@/utils/format";
+import {useDeviceStore} from "@/stores/deviceStore";
+import {onlineLabel} from "@/utils/format";
 
 defineProps<{
   booting: boolean;
@@ -22,10 +16,10 @@ const route = useRoute();
 const deviceStore = useDeviceStore();
 
 const navItems = [
-  { name: "dashboard", label: "Dashboard", icon: LayoutDashboard, to: "/" },
-  { name: "devices", label: "Devices", icon: Cpu, to: "/devices" },
-  { name: "logs", label: "Logs", icon: ScrollText, to: "/logs" },
-  { name: "settings", label: "Settings", icon: Settings, to: "/settings" },
+  {name: "dashboard", label: "首页", icon: LayoutDashboard, to: "/"},
+  {name: "devices", label: "设备", icon: Cpu, to: "/devices"},
+  {name: "logs", label: "日志", icon: ScrollText, to: "/logs"},
+  {name: "settings", label: "设置", icon: Settings, to: "/settings"},
 ] as const;
 
 const currentLabel = computed(() => {
@@ -41,7 +35,7 @@ const currentLabel = computed(() => {
         <span class="brand-icon"><RadioTower :size="22" /></span>
         <div>
           <strong>USB Relay Cloud</strong>
-          <span>Device operations</span>
+          <span>设备管理平台</span>
         </div>
       </div>
 

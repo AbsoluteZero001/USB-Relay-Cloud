@@ -182,6 +182,11 @@ Current boundaries:
   load balancer
 - Nginx proxies REST and WebSocket separately
 
+A public deployment should add a simple username/password login with
+short-lived JWT access tokens before opening relay control to the
+internet. MQTT, OAuth2 providers, and complex RBAC are not prerequisites
+for that first authentication layer.
+
 ## 8. Future Extensions
 
 The package and interface boundaries allow later introduction of:

@@ -1,15 +1,11 @@
 <script setup lang="ts">
-import { Filter, RefreshCw, ScrollText } from "@lucide/vue";
-import { computed, onMounted, reactive, ref } from "vue";
+import {Filter, RefreshCw, ScrollText} from "@lucide/vue";
+import {computed, onMounted, reactive, ref} from "vue";
 
 import EventLogList from "@/components/EventLogList.vue";
-import { useDeviceStore } from "@/stores/deviceStore";
-import { useEventStore } from "@/stores/eventStore";
-import type {
-  EventSource,
-  RelayAction,
-  RelayEventQuery,
-} from "@/types/api";
+import {useDeviceStore} from "@/stores/deviceStore";
+import {useEventStore} from "@/stores/eventStore";
+import type {EventSource, RelayAction, RelayEventQuery,} from "@/types/api";
 
 const deviceStore = useDeviceStore();
 const eventStore = useEventStore();
@@ -73,10 +69,10 @@ onMounted(() => {
     <section class="filter-bar">
       <div class="filter-title">
         <Filter :size="17" />
-        <strong>Filters</strong>
+        <strong>筛选</strong>
       </div>
       <label>
-        <span>Device</span>
+        <span>设备</span>
         <select
           :value="selectedDeviceId ?? ''"
           @change="
@@ -96,17 +92,17 @@ onMounted(() => {
         </select>
       </label>
       <label>
-        <span>Action</span>
+        <span>动作</span>
         <select v-model="filters.action">
-          <option value="">All</option>
+          <option value="">全部</option>
           <option value="ON">ON</option>
           <option value="OFF">OFF</option>
         </select>
       </label>
       <label>
-        <span>Source</span>
+        <span>来源</span>
         <select v-model="filters.source">
-          <option value="">All</option>
+          <option value="">全部</option>
           <option value="ANDROID">Android</option>
           <option value="WEB">Web</option>
           <option value="ELECTRON">Electron</option>
@@ -114,11 +110,11 @@ onMounted(() => {
         </select>
       </label>
       <label>
-        <span>From</span>
+        <span>开始时间</span>
         <input v-model="filters.from" type="datetime-local" />
       </label>
       <label>
-        <span>To</span>
+        <span>结束时间</span>
         <input v-model="filters.to" type="datetime-local" />
       </label>
       <div class="filter-actions">
@@ -129,14 +125,14 @@ onMounted(() => {
           @click="load(1)"
         >
           <RefreshCw :size="15" :class="{ spin: loading }" />
-          Apply
+          应用
         </button>
         <button
           class="button button-secondary"
           type="button"
           @click="resetFilters"
         >
-          Reset
+          重置
         </button>
       </div>
     </section>
@@ -144,10 +140,10 @@ onMounted(() => {
     <section class="data-panel">
       <div class="panel-heading">
         <div>
-          <span class="section-kicker">Append-only audit log</span>
-          <h2>Relay Events</h2>
+          <span class="section-kicker">只追加审计日志</span>
+          <h2>继电器事件</h2>
         </div>
-        <span class="record-count">{{ eventStore.total }} records</span>
+        <span class="record-count">共 {{ eventStore.total }} 条</span>
       </div>
 
       <EventLogList
@@ -156,8 +152,8 @@ onMounted(() => {
       />
       <div v-else class="empty-state compact">
         <ScrollText :size="24" />
-        <strong>No relay events</strong>
-        <span>Upload a relay event to start the audit log.</span>
+        <strong>暂无继电器事件</strong>
+        <span>上传第一条继电器操作后会显示在这里。</span>
       </div>
 
       <div v-if="eventStore.total > 0" class="pagination">
@@ -169,7 +165,7 @@ onMounted(() => {
             :disabled="eventStore.page <= 1 || loading"
             @click="load(eventStore.page - 1)"
           >
-            Previous
+            上一页
           </button>
           <button
             class="button button-secondary"
@@ -179,7 +175,7 @@ onMounted(() => {
             "
             @click="load(eventStore.page + 1)"
           >
-            Next
+            下一页
           </button>
         </div>
       </div>

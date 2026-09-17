@@ -1,19 +1,11 @@
 <script setup lang="ts">
-import {
-  ArrowRight,
-  Cpu,
-  Radio,
-  RefreshCw,
-} from "@lucide/vue";
-import { onMounted, ref } from "vue";
-import { useRouter } from "vue-router";
+import {ArrowRight, Cpu, Radio, RefreshCw,} from "@lucide/vue";
+import {onMounted, ref} from "vue";
+import {useRouter} from "vue-router";
 
-import { useDeviceStore } from "@/stores/deviceStore";
-import { useRelayStore } from "@/stores/relayStore";
-import {
-  formatRelativeTime,
-  onlineLabel,
-} from "@/utils/format";
+import {useDeviceStore} from "@/stores/deviceStore";
+import {useRelayStore} from "@/stores/relayStore";
+import {formatRelativeTime, onlineLabel,} from "@/utils/format";
 
 const router = useRouter();
 const deviceStore = useDeviceStore();
@@ -49,8 +41,8 @@ onMounted(() => {
   <div class="devices-page">
     <section class="page-toolbar">
       <div>
-        <span class="section-kicker">Registered hardware</span>
-        <h2>{{ deviceStore.devices.length }} Devices</h2>
+        <span class="section-kicker">已注册硬件</span>
+        <h2>{{ deviceStore.devices.length }} 个设备</h2>
       </div>
       <button
         class="button button-secondary"
@@ -59,7 +51,7 @@ onMounted(() => {
         @click="refresh"
       >
         <RefreshCw :size="16" :class="{ spin: refreshing }" />
-        Refresh
+        刷新
       </button>
     </section>
 
@@ -89,7 +81,7 @@ onMounted(() => {
           <small>{{ formatRelativeTime(device.lastSeen) }}</small>
         </span>
         <span class="device-list-command">
-          <small>Last Command</small>
+          <small>最后指令</small>
           <strong>
             {{
               relayStore.stateFor(device.deviceId, 1)?.commandedState ??
@@ -103,8 +95,8 @@ onMounted(() => {
 
     <div v-else class="empty-state">
       <Cpu :size="28" />
-      <strong>No devices registered</strong>
-      <span>Heartbeat and relay events create device records.</span>
+      <strong>暂无设备</strong>
+      <span>心跳或继电器事件会自动创建设备记录。</span>
     </div>
   </div>
 </template>

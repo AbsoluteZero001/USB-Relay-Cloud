@@ -1,6 +1,7 @@
-import axios, { AxiosError, type AxiosResponse } from "axios";
+import axios, {AxiosError, type AxiosResponse} from "axios";
 
-import type { ApiResponse } from "@/types/api";
+import {getApiBaseUrl} from "@/config/runtimeConfig";
+import type {ApiResponse} from "@/types/api";
 
 export class ApiError extends Error {
   readonly code: string;
@@ -22,7 +23,6 @@ export class ApiError extends Error {
 }
 
 export const http = axios.create({
-  baseURL: import.meta.env.VITE_API_BASE_URL,
   timeout: 10_000,
   headers: {
     "Content-Type": "application/json",
@@ -78,14 +78,23 @@ export function apiGet<T>(
   url: string,
   params?: Record<string, unknown>,
 ): Promise<T> {
-  return unwrap(http.get<ApiResponse<T>>(url, { params }));
+    return unwrap(
+        http.get<ApiResponse<T>>(url, {
+            baseURL: getApiBaseUrl(),
+            params,
+        }),
+    );
 }
 
 export function apiPost<T>(
   url: string,
   body?: unknown,
 ): Promise<T> {
-  return unwrap(http.post<ApiResponse<T>>(url, body));
+    return unwrap(
+        http.post<ApiResponse<T>>(url, body, {
+            baseURL: getApiBaseUrl(),
+        }),
+    );
 }
 
 export function getApiErrorMessage(error: unknown): string {

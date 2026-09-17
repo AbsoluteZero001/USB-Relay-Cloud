@@ -1,20 +1,15 @@
 <script setup lang="ts">
-import {
-  ArrowRight,
-  Cpu,
-  RefreshCw,
-  ScrollText,
-} from "@lucide/vue";
-import { computed, ref } from "vue";
-import { RouterLink } from "vue-router";
+import {ArrowRight, Cpu, RefreshCw, ScrollText,} from "@lucide/vue";
+import {computed, ref} from "vue";
+import {RouterLink} from "vue-router";
 
 import EventLogList from "@/components/EventLogList.vue";
 import LocalRelayPanel from "@/components/LocalRelayPanel.vue";
 import StatePanel from "@/components/StatePanel.vue";
-import { useDeviceStore } from "@/stores/deviceStore";
-import { useEventStore } from "@/stores/eventStore";
-import { useRelayStore } from "@/stores/relayStore";
-import type { RelayExecutionResult } from "@/types/api";
+import {useDeviceStore} from "@/stores/deviceStore";
+import {useEventStore} from "@/stores/eventStore";
+import {useRelayStore} from "@/stores/relayStore";
+import type {RelayExecutionResult} from "@/types/api";
 
 const deviceStore = useDeviceStore();
 const relayStore = useRelayStore();
@@ -65,7 +60,7 @@ function applyLocalResult(result: RelayExecutionResult): void {
   <div class="dashboard-page">
     <section class="page-toolbar">
       <div class="device-switcher" v-if="deviceStore.devices.length">
-        <label for="dashboard-device">Device</label>
+        <label for="dashboard-device">设备</label>
         <select
           id="dashboard-device"
           :value="deviceStore.selectedDeviceId ?? ''"
@@ -86,7 +81,7 @@ function applyLocalResult(result: RelayExecutionResult): void {
       </div>
       <div v-else class="toolbar-empty">
         <Cpu :size="16" />
-        No device registered
+        暂无设备
       </div>
 
       <button
@@ -96,7 +91,7 @@ function applyLocalResult(result: RelayExecutionResult): void {
         @click="refresh"
       >
         <RefreshCw :size="16" :class="{ spin: refreshing }" />
-        Refresh
+        刷新
       </button>
     </section>
 
@@ -114,11 +109,11 @@ function applyLocalResult(result: RelayExecutionResult): void {
     <section class="data-panel">
       <div class="panel-heading">
         <div>
-          <span class="section-kicker">Realtime history</span>
-          <h2>Recent Events</h2>
+          <span class="section-kicker">实时历史</span>
+          <h2>最近事件</h2>
         </div>
         <RouterLink class="text-link" to="/logs">
-          Open Logs
+          查看全部日志
           <ArrowRight :size="15" />
         </RouterLink>
       </div>
@@ -133,8 +128,8 @@ function applyLocalResult(result: RelayExecutionResult): void {
     >
       <ScrollText :size="20" />
       <div>
-        <strong>Register the first device</strong>
-        <span>Use heartbeat or upload a relay event.</span>
+        <strong>注册第一台设备</strong>
+        <span>发送心跳或上传继电器事件后即可开始。</span>
       </div>
       <ArrowRight :size="18" />
     </RouterLink>

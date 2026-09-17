@@ -1,8 +1,4 @@
-import type {
-  EventSource,
-  OnlineStatus,
-  RelayStateValue,
-} from "@/types/api";
+import type {CommandStatus, EventSource, OnlineStatus, RelayStateValue, WebSocketStatus,} from "@/types/api";
 
 export function formatDateTime(value: string | null | undefined): string {
   if (!value) return "—";
@@ -71,5 +67,20 @@ export function stateLabel(state: RelayStateValue): string {
 }
 
 export function onlineLabel(status: OnlineStatus): string {
-  return status === "ONLINE" ? "Online" : "Offline";
+    return status === "ONLINE" ? "在线" : "离线";
+}
+
+export function commandStatusLabel(status: CommandStatus): string {
+    return status === "SUCCESS" ? "成功" : "失败";
+}
+
+export function webSocketStatusLabel(status: WebSocketStatus): string {
+    const labels: Record<WebSocketStatus, string> = {
+        idle: "未连接",
+        connecting: "连接中",
+        connected: "已连接",
+        reconnecting: "重连中",
+        disconnected: "已断开",
+    };
+    return labels[status];
 }
