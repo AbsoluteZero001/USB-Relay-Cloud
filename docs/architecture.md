@@ -14,6 +14,19 @@ MQTT, Kafka, Redis, OAuth2, complex RBAC, microservices, OTA, and
 Cloud-to-Device remote control are not part of phase one. The module
 boundaries below leave room for them.
 
+Phase one supports two equivalent production deployments:
+
+- **Part A — Docker Compose**: one `docker compose up` brings up
+  MySQL + Spring Boot + Nginx, with Spring Boot 8080 and MySQL 3306
+  on the Docker internal network only.
+- **Part B — Native Ubuntu**: Spring Boot runs as a `systemd` service
+  under a non-root user, MySQL is a host service, and Nginx is a host
+  reverse proxy. Spring Boot 8080 and MySQL 3306 bind only to
+  `127.0.0.1`.
+
+Both variants expose only the Nginx port to the public internet. See
+[docs/deployment.md](deployment.md) for the full procedure.
+
 ## 2. Three Layers
 
 ### Device
@@ -196,8 +209,10 @@ Other boundaries:
 - production traffic is expected to terminate TLS at Nginx or a cloud
   load balancer
 - Nginx proxies REST and WebSocket separately
-- Spring Boot 8080 and MySQL 3306 are Docker-internal only; only
-  Nginx on Host:8088 is exposed
+- Spring Boot 8080 and MySQL 3306 never bind to a public interface.
+  In Docker Compose they live on the container internal network; in
+  Native Ubuntu they bind to `127.0.0.1` only. Only the Nginx port
+  (default `8088` in Docker, `80`/`443` in Native) is exposed
 
 Not implemented: Refresh Token rotation, OAuth2 / SSO, multi-tenant
 isolation, complex RBAC beyond the global + device role pair, and

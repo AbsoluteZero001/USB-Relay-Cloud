@@ -25,6 +25,7 @@ V1 已实现：
 - 客户端 EventOutbox：本地待同步队列，重连/启动自动重试
 - 客户端可配置服务器地址（自动派生 REST / WS）
 - Docker Compose、Nginx（Host 8088→Nginx80）、MySQL、Server 部署
+- Native Ubuntu 部署（systemd + 裸 MySQL + 裸 Nginx + 可执行 JAR）
 - Capacitor Android 工程与 Kotlin USB Host 插件迁移
 - Web Serial、Android USB 与 Electron IPC 的 Provider/Adapter 边界
 
@@ -418,7 +419,13 @@ Debug 构建允许局域网 HTTP 调试；Release 构建要求 HTTPS/WSS。
 当前 Android 代码尚未在本仓库完成真实 USB OTG + CH340 + LCUS-1
 实机控制验证。
 
-## Docker
+## 部署方案
+
+V1 同时支持两套等价的生产部署方案。两套方案都遵守同样的安全约束：
+对外只开放 Nginx 端口，Spring Boot 8080 与 MySQL 3306 不暴露公网，
+`JWT_SECRET` ≥ 32 字符，FAILED 事件不污染状态，Cloud-to-Device 未实现。
+
+### Part A — Docker Compose（推荐）
 
 生产拓扑（仅 Nginx 80 通过 Host 8088 暴露公网）：
 
@@ -453,7 +460,63 @@ sh scripts/start.sh
 sh scripts/stop.sh
 ```
 
-详细 Ubuntu 24.04 部署流程见 [docs/deployment.md](docs/deployment.md)。
+### Part B — Native Ubuntu（无 Docker）
+
+适用于企业内网禁用容器、需要直接对接 systemd / 裸 MySQL / 裸 Nginx
+的场景。生产拓扑：
+
+```text
+Internet
+  -> :80 (或 :443 + TLS) -> Nginx (host)
+     -> /api/ proxy_pass http://127.0.0.1:8080
+     -> /ws/  proxy_pass http://127.0.0.1:8080 (WebSocket Upgrade)
+     -> /     -> /var/www/usb-relay-cloud (Vue dist)
+  -> systemd -> java -jar (127.0.0.1:8080，非 root)
+  -> mysql.service (127.0.0.1:3306)
+```
+
+部署文件位于 `deploy/native/`：
+
+| 文件                            | 安装位置                                         | 用途                   |
+|-------------------------------|----------------------------------------------|----------------------|
+| `usb-relay-cloud.service`     | `/etc/systemd/system/`                       | systemd 服务           |
+| `usb-relay-cloud.env.example` | `/etc/usb-relay-cloud/usb-relay-cloud.env`   | Spring Boot 敏感配置     |
+| `nginx.conf`                  | `/etc/nginx/sites-available/usb-relay-cloud` | Nginx 反代 + WebSocket |
+
+最小启动顺序：
+
+```bash
+# 1. 编译 JAR
+cd server
+sudo -u usbrelay mvn -DskipTests package
+sudo cp target/usb-relay-cloud-server-*.jar \
+     /opt/usb-relay-cloud/usb-relay-cloud-server.jar
+
+# 2. 安装敏感配置（chmod 600）
+sudo cp deploy/native/usb-relay-cloud.env.example \
+        /etc/usb-relay-cloud/usb-relay-cloud.env
+sudo nano /etc/usb-relay-cloud/usb-relay-cloud.env
+
+# 3. 安装 systemd 服务
+sudo cp deploy/native/usb-relay-cloud.service /etc/systemd/system/
+sudo systemctl daemon-reload
+sudo systemctl enable --now usb-relay-cloud
+
+# 4. 配置 Nginx
+sudo cp deploy/native/nginx.conf /etc/nginx/sites-available/usb-relay-cloud
+sudo ln -s /etc/nginx/sites-available/usb-relay-cloud \
+           /etc/nginx/sites-enabled/usb-relay-cloud
+sudo nginx -t && sudo systemctl reload nginx
+```
+
+查日志：
+
+```bash
+sudo journalctl -u usb-relay-cloud -f
+```
+
+详细 Ubuntu 24.04 部署流程（含 Part A 与 Part B 完整步骤）见
+[docs/deployment.md](docs/deployment.md)。
 
 ## 当前验证状态
 

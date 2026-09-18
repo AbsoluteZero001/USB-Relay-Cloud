@@ -1,0 +1,73 @@
+# USB Relay Cloud - systemd 服务单元
+#
+# 安装步骤：
+#   sudo cp deploy/native/usb-relay-cloud.service /etc/systemd/system/
+#   sudo systemctl daemon-reload
+#   sudo systemctl enable usb-relay-cloud
+#   sudo systemctl start usb-relay-cloud
+#
+# 查看状态：
+#   sudo systemctl status usb-relay-cloud
+#
+# 查看日志：
+#   sudo journalctl -u usb-relay-cloud -f
+#   sudo journalctl -u usb-relay-cloud --since "10 minutes ago"
+#
+# 重启服务：
+#   sudo systemctl restart usb-relay-cloud
+#
+# 停止服务：
+#   sudo systemctl stop usb-relay-cloud
+#
+# 拓扑：
+#   systemd -> java -jar /opt/usb-relay-cloud/usb-relay-cloud-server.jar
+#   监听 127.0.0.1:8080（由 SERVER_PORT 控制，仅本机访问）
+#   由前台 Nginx 反代 /api/ 和 /ws/ 到 127.0.0.1:8080
+
+[Unit]
+Description=USB Relay Cloud Spring Boot Server
+Documentation=file:///opt/usb-relay-cloud/README.md
+After=network-online.target mysql.service
+Wants=network-online.target
+
+[Service]
+Type=simple
+
+# 非 root 用户运行（部署前需创建该用户）
+User=usbrelay
+Group=usbrelay
+
+# 工作目录（存放 JAR 和日志）
+WorkingDirectory=/opt/usb-relay-cloud
+
+# 敏感配置文件（chmod 600 + chown usbrelay:usbrelay）
+EnvironmentFile=/etc/usb-relay-cloud/usb-relay-cloud.env
+
+# Spring Boot 可执行 JAR
+ExecStart=/usr/bin/java -jar /opt/usb-relay-cloud/usb-relay-cloud-server.jar
+
+# SIGTERM 退出码（Spring Boot 接收 SIGTERM 优雅关闭）
+SuccessExitStatus=143
+TimeoutStopSec=30s
+
+# 异常退出自动重启
+Restart=on-failure
+RestartSec=5s
+
+# 日志写入 journald
+StandardOutput=journal
+StandardError=journal
+SysLogIdentifier=usb-relay-cloud
+
+# 安全加固（限制服务权限）
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=full
+ProtectHome=true
+ReadWritePaths=/opt/usb-relay-cloud/logs
+
+# 资源限制（可选，按机器调整）
+LimitNOFILE=65536
+
+[Install]
+WantedBy=multi-user.target
