@@ -16,9 +16,9 @@ const route = useRoute();
 const deviceStore = useDeviceStore();
 
 const navItems = [
-  {name: "dashboard", label: "首页", icon: LayoutDashboard, to: "/"},
+  {name: "dashboard", label: "控制台", icon: LayoutDashboard, to: "/"},
   {name: "devices", label: "设备", icon: Cpu, to: "/devices"},
-  {name: "logs", label: "日志", icon: ScrollText, to: "/logs"},
+  {name: "logs", label: "操作日志", icon: ScrollText, to: "/logs"},
   {name: "settings", label: "设置", icon: Settings, to: "/settings"},
 ] as const;
 

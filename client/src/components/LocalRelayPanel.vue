@@ -200,7 +200,7 @@ onBeforeUnmount(() => {
           @click="execute('OFF')"
         >
           <PowerOff :size="17" />
-          继电器 OFF
+          关闭
         </button>
         <button
           class="button button-on"
@@ -209,7 +209,7 @@ onBeforeUnmount(() => {
           @click="execute('ON')"
         >
           <Power :size="17" />
-          继电器 ON
+          开启
         </button>
       </div>
 
@@ -219,7 +219,7 @@ onBeforeUnmount(() => {
         {{ cloudNotice }}
       </p>
       <p class="inline-note">
-        硬件状态固定为 UNKNOWN，LCUS-1 无已验证的状态回读协议。
+        硬件状态始终为未知，LCUS-1 无已验证的状态回读协议。
       </p>
     </template>
   </section>

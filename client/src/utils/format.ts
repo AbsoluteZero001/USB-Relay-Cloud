@@ -1,4 +1,11 @@
-import type {CommandStatus, EventSource, OnlineStatus, RelayStateValue, WebSocketStatus,} from "@/types/api";
+import type {
+    CommandStatus,
+    EventSource,
+    OnlineStatus,
+    RelayAction,
+    RelayStateValue,
+    WebSocketStatus,
+} from "@/types/api";
 
 export function formatDateTime(value: string | null | undefined): string {
   if (!value) return "—";
@@ -62,8 +69,16 @@ export function sourceLabel(source: EventSource): string {
 }
 
 export function stateLabel(state: RelayStateValue): string {
-  if (state === "UNKNOWN") return "UNKNOWN";
-  return state;
+    const labels: Record<RelayStateValue, string> = {
+        ON: "开启",
+        OFF: "关闭",
+        UNKNOWN: "未知",
+    };
+    return labels[state];
+}
+
+export function actionLabel(action: RelayAction): string {
+    return action === "ON" ? "开启" : "关闭";
 }
 
 export function onlineLabel(status: OnlineStatus): string {

@@ -107,7 +107,9 @@ export interface RelayWebSocketMessage {
     | "RELAY_STATE_CHANGED"
     | "DEVICE_STATUS_CHANGED"
     | "SYNC_COMPLETE"
-    | "ERROR";
+      | "ERROR"
+      | "AUTHENTICATED"
+      | "AUTH_FAILED";
   sequence?: number;
   eventId?: string;
   deviceId?: string;
@@ -124,6 +126,18 @@ export interface RelayWebSocketMessage {
   onlineStatus?: OnlineStatus;
   timestamp?: string;
   message?: string;
+}
+
+export interface LoginResponse {
+    accessToken: string;
+    tokenType: string;
+    expiresIn: number;
+}
+
+export interface CurrentUser {
+    userId: number;
+    username: string;
+    globalRole: string;
 }
 
 export type CloudSyncStatus = "SUCCESS" | "FAILED" | "NOT_REQUIRED";

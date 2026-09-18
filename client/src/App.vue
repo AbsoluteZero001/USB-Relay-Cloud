@@ -1,20 +1,22 @@
 <script setup lang="ts">
-import { onBeforeUnmount, onMounted, ref, watch } from "vue";
+import {onBeforeUnmount, ref, watch} from "vue";
 
 import AppLayout from "@/layouts/AppLayout.vue";
 import { relayWebSocket } from "@/services/websocket";
 import { websocketMessageToRelayEvent } from "@/services/websocket/message";
+import {useAuthStore} from "@/stores/authStore";
 import { useConnectionStore } from "@/stores/connectionStore";
 import { useDeviceStore } from "@/stores/deviceStore";
 import { useEventStore } from "@/stores/eventStore";
 import { useRelayStore } from "@/stores/relayStore";
 
+const authStore = useAuthStore();
 const deviceStore = useDeviceStore();
 const eventStore = useEventStore();
 const relayStore = useRelayStore();
 const connectionStore = useConnectionStore();
 
-const bootstrapping = ref(true);
+const bootstrapping = ref(false);
 const bootstrapError = ref<string | null>(null);
 let unsubscribeMessage: (() => void) | null = null;
 let unsubscribeStatus: (() => void) | null = null;
@@ -42,10 +44,27 @@ function scheduleDeviceRefresh(deviceId: string): void {
   }, 400);
 }
 
+function teardownSubscriptions(): void {
+  unsubscribeMessage?.();
+  unsubscribeStatus?.();
+  unsubscribeMessage = null;
+  unsubscribeStatus = null;
+  relayWebSocket.disconnect();
+  if (deviceRefreshTimer !== null) {
+    window.clearTimeout(deviceRefreshTimer);
+    deviceRefreshTimer = null;
+  }
+}
+
 async function bootstrap(): Promise<void> {
   bootstrapping.value = true;
   bootstrapError.value = null;
   try {
+    await authStore.refreshUser();
+    if (!authStore.isAuthenticated) {
+      // token 无效，交给路由守卫跳转 /login
+      return;
+    }
     await deviceStore.loadDevices();
     await loadSelectedDevice(deviceStore.selectedDeviceId);
 
@@ -76,6 +95,8 @@ async function bootstrap(): Promise<void> {
         connectionStore.setError(message.message);
       }
     });
+    // 连接 WebSocket；客户端会在 open 后自动发送 AUTH 帧，
+    // 服务端验证通过后会推送 gap replay（基于 latestSequence）。
     relayWebSocket.connect(eventStore.latestSequence);
   } catch (error) {
     bootstrapError.value =
@@ -86,24 +107,31 @@ async function bootstrap(): Promise<void> {
   }
 }
 
+// 登录成功 → bootstrap；登出 → 清理 WS 与 store
+watch(
+    () => authStore.isAuthenticated,
+    (authenticated) => {
+      if (authenticated) {
+        void bootstrap();
+      } else {
+        teardownSubscriptions();
+        eventStore.clear();
+      }
+    },
+    {immediate: true},
+);
+
 watch(
   () => deviceStore.selectedDeviceId,
   (deviceId) => {
-    void loadSelectedDevice(deviceId);
+    if (authStore.isAuthenticated) {
+      void loadSelectedDevice(deviceId);
+    }
   },
 );
 
-onMounted(() => {
-  void bootstrap();
-});
-
 onBeforeUnmount(() => {
-  unsubscribeMessage?.();
-  unsubscribeStatus?.();
-  relayWebSocket.disconnect();
-  if (deviceRefreshTimer !== null) {
-    window.clearTimeout(deviceRefreshTimer);
-  }
+  teardownSubscriptions();
 });
 </script>
 

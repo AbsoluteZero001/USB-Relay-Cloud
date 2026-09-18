@@ -54,6 +54,27 @@ public interface RelayEventMapper extends BaseMapper<RelayEventEntity> {
             SELECT id, event_id, device_id, channel, action, previous_state,
                    current_state, command_status, source, client_id, created_at
             FROM relay_event
+            WHERE id &gt; #{afterSequence}
+              AND device_id IN
+              <foreach collection="deviceIds" item="d"
+                       open="(" close=")" separator=",">
+                #{d}
+              </foreach>
+            ORDER BY id ASC
+            LIMIT #{limit}
+            </script>
+            """)
+    List<RelayEventEntity> selectAfterSequenceForDevices(
+            @Param("afterSequence") long afterSequence,
+            @Param("deviceIds") java.util.Collection<String> deviceIds,
+            @Param("limit") int limit
+    );
+
+    @Select("""
+            <script>
+            SELECT id, event_id, device_id, channel, action, previous_state,
+                   current_state, command_status, source, client_id, created_at
+            FROM relay_event
             WHERE device_id = #{deviceId}
             <if test="afterSequence != null">
               AND id &gt; #{afterSequence}

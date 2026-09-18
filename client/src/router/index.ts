@@ -1,13 +1,21 @@
 import {createRouter, createWebHistory} from "vue-router";
 
+import {useAuthStore} from "@/stores/authStore";
+
 const router = createRouter({
   history: createWebHistory(),
   routes: [
     {
+        path: "/login",
+        name: "login",
+        component: () => import("@/views/LoginView.vue"),
+        meta: {title: "登录", public: true},
+    },
+      {
       path: "/",
       name: "dashboard",
       component: () => import("@/views/DashboardView.vue"),
-        meta: {title: "首页"},
+          meta: {title: "控制台"},
     },
     {
       path: "/devices",
@@ -19,7 +27,7 @@ const router = createRouter({
       path: "/logs",
       name: "logs",
       component: () => import("@/views/LogsView.vue"),
-        meta: {title: "日志"},
+        meta: {title: "操作日志"},
     },
     {
       path: "/settings",
@@ -34,10 +42,30 @@ const router = createRouter({
   ],
 });
 
+// 全局前置守卫：未登录访问受保护路由 → 跳转 /login?redirect=<原路径>
+router.beforeEach((to) => {
+    const auth = useAuthStore();
+    if (to.meta.public) {
+        if (to.name === "login" && auth.isAuthenticated) {
+            return {name: "dashboard"};
+        }
+        return true;
+    }
+    if (!auth.isAuthenticated) {
+        return {
+            name: "login",
+            query: to.fullPath && to.fullPath !== "/"
+                ? {redirect: to.fullPath}
+                : undefined,
+        };
+    }
+    return true;
+});
+
 router.afterEach((route) => {
   const title = typeof route.meta.title === "string"
     ? route.meta.title
-      : "首页";
+      : "控制台";
   document.title = `${title} · USB Relay Cloud`;
 });
 

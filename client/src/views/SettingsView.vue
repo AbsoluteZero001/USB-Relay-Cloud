@@ -2,7 +2,7 @@
 import {Cloud, Cpu, HeartPulse, RotateCcw, Save, ShieldCheck, Usb, Wifi,} from "@lucide/vue";
 import {computed, reactive, ref} from "vue";
 
-import {fetchDevices} from "@/api/deviceApi";
+import {connectionTestLabel, testServerConnection,} from "@/api/healthApi";
 import {getApiErrorMessage} from "@/api/http";
 import {
   clearConfiguredServerBaseUrl,
@@ -81,10 +81,12 @@ async function testCloudConnection(): Promise<void> {
   message.value = null;
   error.value = null;
   try {
-    const page = await fetchDevices();
-    message.value = `连接成功，读取到 ${page.total} 个设备`;
-  } catch (caught) {
-    error.value = getApiErrorMessage(caught);
+    const outcome = await testServerConnection();
+    if (outcome.status === "ok") {
+      message.value = "连接成功";
+    } else {
+      error.value = connectionTestLabel(outcome);
+    }
   } finally {
     testing.value = false;
   }
@@ -265,7 +267,7 @@ async function heartbeat(): Promise<void> {
           </div>
           <div>
             <dt>硬件状态</dt>
-            <dd>未知（UNKNOWN）</dd>
+            <dd>未知</dd>
           </div>
         </dl>
       </div>
@@ -280,7 +282,7 @@ async function heartbeat(): Promise<void> {
         <h2>LCUS-1 状态说明</h2>
         <p class="settings-copy">
           串口写入成功只表示 commandedState 已发送。当前没有经过验证的
-          LCUS-1 硬件状态回读协议，因此 hardwareState 始终为 UNKNOWN。
+          LCUS-1 硬件状态回读协议，因此 hardwareState 始终为未知。
         </p>
       </div>
     </section>

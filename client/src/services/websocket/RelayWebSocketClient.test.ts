@@ -12,6 +12,7 @@ class FakeSocket {
 
   readonly url: string;
   readyState = FakeSocket.CONNECTING;
+    readonly sent: string[] = [];
   private readonly listeners = new Map<string, Set<(event: Event) => void>>();
 
   constructor(url: string) {
@@ -24,6 +25,10 @@ class FakeSocket {
     listeners.add(listener);
     this.listeners.set(type, listeners);
   }
+
+    send(data: string): void {
+        this.sent.push(data);
+    }
 
   close(code = 1000, reason = ""): void {
     this.readyState = FakeSocket.CLOSED;
@@ -51,6 +56,8 @@ class FakeSocket {
   }
 }
 
+const FAKE_TOKEN = "fake-jwt-token";
+
 afterEach(() => {
   FakeSocket.instances = [];
   vi.useRealTimers();
@@ -58,10 +65,11 @@ afterEach(() => {
 });
 
 describe("RelayWebSocketClient", () => {
-  it("adds afterSequence and dispatches typed messages", () => {
+    it("sends AUTH frame on open and dispatches business messages", () => {
     vi.stubGlobal("WebSocket", FakeSocket);
     const client = new RelayWebSocketClient(
       "ws://localhost:8080/ws/relay",
+        () => FAKE_TOKEN,
     );
     const listener = vi.fn();
     client.onMessage(listener);
@@ -71,6 +79,20 @@ describe("RelayWebSocketClient", () => {
     expect(socket?.url).toContain("afterSequence=37");
 
     socket?.open();
+        // 客户端应在 open 后立即发送 AUTH 帧
+        expect(socket?.sent).toContain(
+            JSON.stringify({type: "AUTH", token: FAKE_TOKEN}),
+        );
+
+        socket?.message(
+            JSON.stringify({
+                type: "AUTHENTICATED",
+                message: "authenticated as admin",
+                timestamp: "2026-09-17T14:32:18Z",
+            }),
+        );
+        expect(client.isAuthenticated()).toBe(true);
+
     socket?.message(
       JSON.stringify({
         type: "SYNC_COMPLETE",
@@ -84,11 +106,54 @@ describe("RelayWebSocketClient", () => {
     );
   });
 
+    it("disconnects on AUTH_FAILED without reconnecting", () => {
+        vi.useFakeTimers();
+        vi.stubGlobal("WebSocket", FakeSocket);
+        const client = new RelayWebSocketClient(
+            "ws://localhost:8080/ws/relay",
+            () => FAKE_TOKEN,
+        );
+        const status = vi.fn();
+        client.onStatus(status);
+
+        client.connect();
+        FakeSocket.instances[0]?.open();
+        FakeSocket.instances[0]?.message(
+            JSON.stringify({
+                type: "AUTH_FAILED",
+                message: "JWT 无效或已过期",
+                timestamp: "2026-09-17T14:32:18Z",
+            }),
+        );
+
+        expect(status).toHaveBeenLastCalledWith("disconnected");
+        expect(client.isAuthenticated()).toBe(false);
+
+        // AUTH_FAILED 不应触发重连
+        vi.advanceTimersByTime(30_000);
+        expect(FakeSocket.instances).toHaveLength(1);
+    });
+
+    it("does not open socket when no token is available", () => {
+        vi.stubGlobal("WebSocket", FakeSocket);
+        const client = new RelayWebSocketClient(
+            "ws://localhost:8080/ws/relay",
+            () => null,
+        );
+        const status = vi.fn();
+        client.onStatus(status);
+
+        client.connect();
+        expect(FakeSocket.instances).toHaveLength(0);
+        expect(status).toHaveBeenLastCalledWith("disconnected");
+    });
+
   it("reconnects with exponential backoff after an unexpected close", () => {
     vi.useFakeTimers();
     vi.stubGlobal("WebSocket", FakeSocket);
     const client = new RelayWebSocketClient(
       "ws://localhost:8080/ws/relay",
+        () => FAKE_TOKEN,
     );
     const status = vi.fn();
     client.onStatus(status);

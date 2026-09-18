@@ -13,11 +13,12 @@ Open only the ports that are required:
 
 ```text
 22/tcp   SSH
-80/tcp   HTTP
-443/tcp  HTTPS, after TLS is configured
+8088/tcp HTTP (Nginx public entry, maps Host:8088 -> container:80)
+443/tcp  HTTPS, after TLS is configured in front of Nginx
 ```
 
-MySQL and the Spring Boot port should remain private in production.
+MySQL 3306 and Spring Boot 8080 are Docker-internal only. Do not expose
+them on the host or to the public internet.
 
 ## 2. Environment
 
@@ -34,10 +35,20 @@ Set strong, different values for:
 ```text
 MYSQL_PASSWORD
 MYSQL_ROOT_PASSWORD
+JWT_SECRET                         # >= 32 chars, e.g. openssl rand -base64 48
+APP_BOOTSTRAP_ADMIN_USERNAME       # only used on first boot when sys_user is empty
+APP_BOOTSTRAP_ADMIN_PASSWORD
+APP_CORS_ALLOWED_ORIGINS           # comma-separated HTTPS origins; * for dev only
 ```
 
-Set `CORS_ALLOWED_ORIGIN_PATTERNS` to the real HTTPS origin. Do not commit
-`deploy/.env`.
+`JWT_SECRET` is required in production. The server refuses to boot if
+it is missing or shorter than 32 characters under the `prod` profile.
+
+The bootstrap admin is created only once, when `sys_user` is empty.
+After that, rotating the admin password requires either changing it in
+the database (BCrypt hash) or doing it through a future admin UI.
+
+Do not commit `deploy/.env`.
 
 ## 3. Start
 
@@ -47,15 +58,21 @@ sh scripts/start.sh
 
 The Compose stack contains:
 
-- MySQL 8.4
-- Spring Boot server
-- Nginx serving the Vue build and proxying `/api/` plus `/ws/`
+- MySQL 8.4 (internal)
+- Spring Boot server on 8080 (internal, behind Nginx)
+- Nginx on Host:8088 serving the Vue build and proxying `/api/` + `/ws/`
 
 Check:
 
 ```bash
 docker compose --env-file .env -f docker-compose.yml ps
 docker compose --env-file .env -f docker-compose.yml logs -f server
+```
+
+Health check (public):
+
+```bash
+curl http://<host>:8088/api/health
 ```
 
 ## 4. Nginx

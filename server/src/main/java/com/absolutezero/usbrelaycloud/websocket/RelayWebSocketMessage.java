@@ -127,4 +127,79 @@ public record RelayWebSocketMessage(
                 "replayed " + replayedEvents + " event(s)"
         );
     }
+
+    /**
+     * 客户端 AUTH 帧验证通过。message 携带用户名便于调试。
+     */
+    public static RelayWebSocketMessage authenticated(String username) {
+        return new RelayWebSocketMessage(
+                "AUTHENTICATED",
+                null,
+                null,
+                null,
+                null,
+                null,
+                null,
+                null,
+                null,
+                null,
+                null,
+                null,
+                null,
+                null,
+                null,
+                Instant.now(),
+                "authenticated as " + username
+        );
+    }
+
+    /**
+     * 客户端 AUTH 帧验证失败。reason 为失败原因（中文 UI 文案）。
+     */
+    public static RelayWebSocketMessage authFailed(String reason) {
+        return new RelayWebSocketMessage(
+                "AUTH_FAILED",
+                null,
+                null,
+                null,
+                null,
+                null,
+                null,
+                null,
+                null,
+                null,
+                null,
+                null,
+                null,
+                null,
+                null,
+                Instant.now(),
+                reason
+        );
+    }
+
+    /**
+     * 通用 ERROR 消息（如认证超时、协议错误）。
+     */
+    public static RelayWebSocketMessage error(String message) {
+        return new RelayWebSocketMessage(
+                "ERROR",
+                null,
+                null,
+                null,
+                null,
+                null,
+                null,
+                null,
+                null,
+                null,
+                null,
+                null,
+                null,
+                null,
+                null,
+                Instant.now(),
+                message
+        );
+    }
 }

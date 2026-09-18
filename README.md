@@ -8,21 +8,27 @@ append-only 日志，通过 WebSocket 实时同步其他在线客户端。
 
 ## 当前阶段
 
-Phase 1 已实现：
+V1 已实现：
 
 - Vue 3 + TypeScript + Vite + Pinia + Vue Router + Axios 客户端
 - PC Sidebar 与 Mobile Bottom Navigation 两套真实响应式布局
+- 全部用户可见界面中文化（API/DB/协议字段保持英文）
 - Spring Boot 3 + Java 21 + MyBatis-Plus + MySQL 8
-- Flyway 数据库迁移
-- device / relay_state / relay_event
+- Flyway 数据库迁移（V1 设备表 + V2 认证表）
+- device / relay_state / relay_event / sys_user / device_user
 - REST 设备、状态、事件、心跳接口
+- Spring Security + BCrypt + JWT 认证
+- 设备级权限（OWNER / CONTROL / VIEWER，ADMIN 全访问）
 - WebSocket 重连、指数退避、事件去重和 sequence 补发
-- eventId 幂等
-- Docker Compose、Nginx、MySQL、Server 部署基础
+- WebSocket AUTH 帧强制认证 + 5s 超时 + 设备权限过滤
+- eventId 幂等；FAILED 事件不污染 relay_state（spec §19）
+- 客户端 EventOutbox：本地待同步队列，重连/启动自动重试
+- 客户端可配置服务器地址（自动派生 REST / WS）
+- Docker Compose、Nginx（Host 8088→Nginx80）、MySQL、Server 部署
 - Capacitor Android 工程与 Kotlin USB Host 插件迁移
 - Web Serial、Android USB 与 Electron IPC 的 Provider/Adapter 边界
 
-当前没有实现认证、Cloud-to-Device 远程控制、MQTT、消息队列、Redis、
+当前没有实现 Cloud-to-Device 远程控制、MQTT、消息队列、Redis、
 微服务、Kubernetes、OTA 或多租户。
 
 ## 重要状态说明
@@ -211,6 +217,10 @@ DB_URL
 DB_USERNAME
 DB_PASSWORD
 SERVER_PORT
+JWT_SECRET                       # ≥ 32 字符，dev profile 有默认值仅供本地
+APP_BOOTSTRAP_ADMIN_USERNAME     # 首次启动 sys_user 为空时创建管理员
+APP_BOOTSTRAP_ADMIN_PASSWORD
+APP_CORS_ALLOWED_ORIGINS         # 开发可用 *
 ```
 
 例如：
@@ -220,6 +230,10 @@ $env:DB_URL="jdbc:mysql://127.0.0.1:3306/usb_relay_cloud?useUnicode=true&charact
 $env:DB_USERNAME="usb_relay"
 $env:DB_PASSWORD="your-local-password"
 $env:SERVER_PORT="8080"
+$env:JWT_SECRET="dev-only-jwt-secret-32chars-min-do-not-use-in-prod"
+$env:APP_BOOTSTRAP_ADMIN_USERNAME="admin"
+$env:APP_BOOTSTRAP_ADMIN_PASSWORD="admin-pass-123"
+$env:APP_CORS_ALLOWED_ORIGINS="*"
 cd server
 mvn spring-boot:run
 ```
@@ -276,13 +290,17 @@ server/src/main/resources/db/migration/
 
 核心表：
 
-- `device`
-- `relay_state`
-- `relay_event`
+- `device` — 设备注册
+- `relay_state` — 每设备最新指令状态（SUCCESS 才 UPSERT）
+- `relay_event` — append-only 事件审计日志
+- `sys_user` — 系统用户（global_role: ADMIN/USER）
+- `device_user` — 设备级授权（role: OWNER/CONTROL/VIEWER）
 
 详细字段和索引见 [docs/database.md](docs/database.md)。
 
 `relay_event` 是 append-only 审计表。正常业务不 UPDATE、不 DELETE。
+`relay_state` 的 `lastEventId` / `commandedState` / `commandStatus`
+仅在事件 `commandStatus = SUCCESS` 时更新；FAILED 事件不污染状态（spec §19）。
 
 ## Spring Boot
 
@@ -306,32 +324,48 @@ Controller 只负责参数和响应，事务逻辑位于 Service。
 
 ## REST 和 WebSocket
 
-主要接口：
+公开接口：
 
 ```text
+GET  /api/health
+POST /api/auth/login        # 用户名/密码 → accessToken
+```
+
+需要 `Authorization: Bearer <token>`：
+
+```text
+GET  /api/auth/me
 GET  /api/devices
 GET  /api/devices/{deviceId}
 GET  /api/devices/{deviceId}/state
 GET  /api/devices/{deviceId}/events
 POST /api/devices/{deviceId}/events
 POST /api/devices/{deviceId}/heartbeat
-GET  /api/health
 ```
 
 WebSocket：
 
 ```text
-ws://host:8080/ws/relay?afterSequence=123
+ws://host:8088/ws/relay?afterSequence=123
 ```
 
-消息：
+连接后必须在 5 秒内发送 AUTH 帧完成认证，否则服务器关闭连接：
 
-- `CONNECTED`
-- `RELAY_STATE_CHANGED`
-- `DEVICE_STATUS_CHANGED`
-- `SYNC_COMPLETE`
-- `ERROR`
+```json
+{ "type": "AUTH", "token": "<accessToken>" }
+```
 
+服务端消息类型：
+
+- `CONNECTED` — 已连接，等待 AUTH
+- `AUTHENTICATED` — 认证成功，之后开始下发业务消息
+- `AUTH_FAILED` — 认证失败，连接即将关闭
+- `RELAY_STATE_CHANGED` — 设备状态实时变更
+- `DEVICE_STATUS_CHANGED` — 设备在线状态变更
+- `SYNC_COMPLETE` — gap replay 补发完成
+- `ERROR` — 鉴权超时或协议错误
+
+非 ADMIN 用户只能收到自己有权限的设备事件；ADMIN 收到全部。
 完整协议见 [docs/api.md](docs/api.md)。
 
 ## Android
@@ -386,16 +420,23 @@ Debug 构建允许局域网 HTTP 调试；Release 构建要求 HTTPS/WSS。
 
 ## Docker
 
-生产拓扑：
+生产拓扑（仅 Nginx 80 通过 Host 8088 暴露公网）：
 
 ```text
 Internet
-  -> Nginx
-     -> /api/ -> Spring Boot
-     -> /ws/  -> Spring Boot WebSocket
+  -> Host:8088 -> Nginx:80
+     -> /api/ -> Spring Boot:8080 (内网)
+     -> /ws/  -> Spring Boot:8080 (内网)
      -> /     -> Vue static files
-  -> MySQL
+  -> MySQL:3306 (内网，不暴露)
 ```
+
+Spring Boot 8080 和 MySQL 3306 不映射到 Host，只走 Docker 内网。
+对外只开放 Nginx 监听的 `HTTP_PORT`（默认 8088）。
+
+启动前必须设置 `JWT_SECRET`（≥ 32 字符）和初始管理员账号
+（`APP_BOOTSTRAP_ADMIN_USERNAME` / `APP_BOOTSTRAP_ADMIN_PASSWORD`），
+详见 `deploy/.env.example`。
 
 启动：
 
@@ -418,49 +459,50 @@ sh scripts/stop.sh
 
 已执行并通过：
 
-- Server Maven 编译和单元测试
+- Server Maven 编译和单元测试（27 个测试，含 Security/JWT/权限）
 - H2 下的 Mapper / 持久化测试
-- MySQL 8.0.43 + Flyway 真实迁移
-- REST Event Upload
+- MySQL 8.0.43 + Flyway 真实迁移（V1 设备表 + V2 认证表）
+- REST Event Upload（需 Bearer Token）
 - eventId 幂等
 - relay_event INSERT
-- relay_state UPSERT
-- WebSocket 实时广播
+- relay_state UPSERT（FAILED 事件不污染状态）
+- WebSocket AUTH 帧认证 + 5s 超时
+- WebSocket 实时广播（按设备权限过滤）
 - WebSocket sequence 补发
 - Browser 跨客户端实时显示
 - Vue TypeScript 严格检查
-- Vitest store / event mapping / WebSocket handling
+- Vitest store / event mapping / WebSocket handling / EventOutbox
 - Vue production build
 - Capacitor `sync android`
+- 闭环验证脚本 `deploy/scripts/verify-closed-loop.mjs`
+  覆盖 login → 401 → WS AUTH → POST → 幂等 → 实时 → gap replay
 
 未完成或未验证：
 
-- Android Gradle APK 构建在当前 Windows 环境因 Android SDK Platform/
-  Build Tools 未安装而停止；Capacitor sync 已通过
+- Android Gradle APK 构建（Phase 13 待执行）
 - Android USB OTG 真机
 - CH340 在 Android 上的读写
 - LCUS-1 Android 实机 ON/OFF
 - Electron Node SerialPort 新项目适配
-- Cloud-to-Device 远程控制
-- 用户认证、授权和多租户
+- Cloud-to-Device 远程控制（仅保留接口，未实现）
 
 ## 已知限制
 
-- 第一阶段无登录和权限控制，不能直接暴露为公网生产系统。
 - LCUS-1 无硬件回读，`hardwareState` 始终为 UNKNOWN。
 - 当前只有通道 1 的 LCUS-1 指令经过验证。
-- WebSocket 全局广播，没有用户或项目级订阅过滤。
-- 大离线队列、事件 outbox、消息队列和分布式一致性尚未实现。
+- ADMIN 可见全部设备事件；普通用户按 `device_user` 授权过滤。
+- 大离线队列、消息队列和分布式一致性尚未实现。
 - Android App 没有后台常驻、开机启动或 Foreground Service。
+- Cloud-to-Device 远程控制未实现，仅保留接口边界。
 
 ## Roadmap
 
-1. 增加认证和项目级授权。
-2. 增加 Cloud-to-Device command 队列。
-3. 根据部署规模引入 Redis 或 MQTT/EMQX。
-4. 完成 Android USB OTG 和 LCUS-1 实机验证。
-5. 恢复 Electron Node SerialPort 完整构建。
-6. 增加事件补偿重试和可观测性。
-7. 增加 OTA、设备固件版本和更完整的设备管理。
+1. 增加 Cloud-to-Device command 队列（远程下发控制）。
+2. 根据部署规模引入 Redis 或 MQTT/EMQX。
+3. 完成 Android USB OTG 和 LCUS-1 实机验证。
+4. 恢复 Electron Node SerialPort 完整构建。
+5. 增加事件补偿重试和可观测性。
+6. 增加 OTA、设备固件版本和更完整的设备管理。
+7. 引入多租户、Refresh Token 和更细粒度审计。
 
 架构细节见 [docs/architecture.md](docs/architecture.md)。

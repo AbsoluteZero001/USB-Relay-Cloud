@@ -17,6 +17,15 @@ usb-relay:
   presence:
     offline-after: 90s
     scan-interval: 30s
+  jwt:
+    secret: test-jwt-secret-at-least-32-characters-long-do-not-use-in-prod
+    expiration: 1h
+  bootstrap:
+    admin:
+      username: test-admin
+      password: test-pass-123
+  cors:
+    allowed-origins: "*"
 
 logging:
   level:

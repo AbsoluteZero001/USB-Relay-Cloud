@@ -78,7 +78,7 @@ public class DeviceController {
             @RequestParam(required = false) RelayAction action,
             @RequestParam(required = false) EventSource source
     ) {
-        deviceService.requireDevice(deviceId);
+        deviceService.requireAccess(deviceId);
         return ApiResponse.success(
                 relayEventService.list(
                         deviceId,
@@ -98,6 +98,8 @@ public class DeviceController {
             @PathVariable String deviceId,
             @Valid @RequestBody RelayEventCreateRequest request
     ) {
+        // 写操作：需要 OWNER 或 CONTROL 权限，ADMIN 全放行
+        deviceService.requireControlAccess(deviceId);
         return ApiResponse.success(
                 relayEventService.record(deviceId, request)
         );

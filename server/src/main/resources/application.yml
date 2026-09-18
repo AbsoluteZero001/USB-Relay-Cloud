@@ -32,3 +32,13 @@ usb-relay:
   presence:
     offline-after: ${DEVICE_OFFLINE_AFTER:90s}
     scan-interval: ${DEVICE_SCAN_INTERVAL:30s}
+  jwt:
+    secret: ${JWT_SECRET:}
+    expiration: ${JWT_EXPIRATION:1h}
+  bootstrap:
+    admin:
+      username: ${APP_BOOTSTRAP_ADMIN_USERNAME:}
+      password: ${APP_BOOTSTRAP_ADMIN_PASSWORD:}
+  cors:
+    # 优先读 APP_CORS_ALLOWED_ORIGINS，回退到旧的 CORS_ALLOWED_ORIGIN_PATTERNS
+    allowed-origins: ${APP_CORS_ALLOWED_ORIGINS:${CORS_ALLOWED_ORIGIN_PATTERNS:*}}

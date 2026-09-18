@@ -5,7 +5,7 @@ import {useRouter} from "vue-router";
 
 import {useDeviceStore} from "@/stores/deviceStore";
 import {useRelayStore} from "@/stores/relayStore";
-import {formatRelativeTime, onlineLabel,} from "@/utils/format";
+import {formatRelativeTime, onlineLabel, stateLabel,} from "@/utils/format";
 
 const router = useRouter();
 const deviceStore = useDeviceStore();
@@ -81,11 +81,13 @@ onMounted(() => {
           <small>{{ formatRelativeTime(device.lastSeen) }}</small>
         </span>
         <span class="device-list-command">
-          <small>最后指令</small>
+          <small>最近指令</small>
           <strong>
             {{
-              relayStore.stateFor(device.deviceId, 1)?.commandedState ??
-              "UNKNOWN"
+              stateLabel(
+                  relayStore.stateFor(device.deviceId, 1)?.commandedState ??
+                  "UNKNOWN",
+              )
             }}
           </strong>
         </span>

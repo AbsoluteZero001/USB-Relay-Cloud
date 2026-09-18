@@ -14,8 +14,6 @@ export class CloudRelayProvider implements RelayProvider {
   async execute(
     _command: RelayProviderCommand,
   ): Promise<RelayProviderExecution> {
-    throw new Error(
-      "Cloud to device remote control is reserved for a later phase",
-    );
+      throw new Error("远程控制将在后续版本提供");
   }
 }

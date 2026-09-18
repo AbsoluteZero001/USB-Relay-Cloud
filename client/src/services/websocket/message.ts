@@ -9,6 +9,8 @@ const MESSAGE_TYPES = new Set<RelayWebSocketMessage["type"]>([
   "DEVICE_STATUS_CHANGED",
   "SYNC_COMPLETE",
   "ERROR",
+    "AUTHENTICATED",
+    "AUTH_FAILED",
 ]);
 
 function isRecord(value: unknown): value is Record<string, unknown> {

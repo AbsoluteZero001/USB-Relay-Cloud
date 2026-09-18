@@ -3,7 +3,7 @@ import {ArrowRight, History, Radio} from "@lucide/vue";
 import {computed} from "vue";
 
 import type {RelayEvent} from "@/types/api";
-import {commandStatusLabel, formatDateTime, sourceLabel,} from "@/utils/format";
+import {commandStatusLabel, formatDateTime, sourceLabel, stateLabel,} from "@/utils/format";
 
 const props = withDefaults(
   defineProps<{
@@ -35,10 +35,10 @@ const visibleEvents = computed(() =>
       </span>
       <div class="event-main">
         <div class="event-transition">
-          <strong>{{ event.previousState }}</strong>
+          <strong>{{ stateLabel(event.previousState) }}</strong>
           <ArrowRight :size="14" />
           <strong :class="event.currentState.toLowerCase()">
-            {{ event.currentState }}
+            {{ stateLabel(event.currentState) }}
           </strong>
         </div>
         <span>

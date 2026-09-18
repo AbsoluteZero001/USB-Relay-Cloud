@@ -170,29 +170,45 @@ It is an extension point, not a completed remote-control feature.
 
 ## 7. Security Boundary
 
-Phase one has no authentication. It must not be exposed directly to the
-public internet without adding authentication and authorization first.
+Authentication and authorization are implemented:
 
-Current boundaries:
+- `POST /api/auth/login` validates username + BCrypt password and
+  returns a short-lived JWT access token
+- all REST endpoints except `/api/health` and `/api/auth/login`
+  require `Authorization: Bearer <token>`
+- WebSocket requires an `AUTH` frame within 5 seconds of `CONNECTED`
+  or the server closes the socket
+- `ADMIN` global role bypasses device-level checks
+- `USER` global role must have a `device_user` grant (`OWNER` /
+  `CONTROL` / `VIEWER`) for the requested device
+- `VIEWER` can read but cannot upload events or heartbeat
+- JWT secret comes only from `JWT_SECRET` env var; in `prod` profile
+  the server refuses to boot with a secret shorter than 32 characters
+- bootstrap admin is created only when `sys_user` is empty AND both
+  `APP_BOOTSTRAP_ADMIN_USERNAME` and `APP_BOOTSTRAP_ADMIN_PASSWORD`
+  are provided; no hardcoded default password
+
+Other boundaries:
 
 - UI does not access native serial APIs
 - Android native bridge accepts Base64 bytes, not shell commands
-- secrets come from environment variables
+- secrets come from environment variables only
 - production traffic is expected to terminate TLS at Nginx or a cloud
   load balancer
 - Nginx proxies REST and WebSocket separately
+- Spring Boot 8080 and MySQL 3306 are Docker-internal only; only
+  Nginx on Host:8088 is exposed
 
-A public deployment should add a simple username/password login with
-short-lived JWT access tokens before opening relay control to the
-internet. MQTT, OAuth2 providers, and complex RBAC are not prerequisites
-for that first authentication layer.
+Not implemented: Refresh Token rotation, OAuth2 / SSO, multi-tenant
+isolation, complex RBAC beyond the global + device role pair, and
+Cloud-to-Device remote control. These are explicit future extensions.
 
 ## 8. Future Extensions
 
 The package and interface boundaries allow later introduction of:
 
-- authentication and project-level authorization
-- multiple users or tenants
+- Refresh Token rotation and SSO / OAuth2
+- multiple users or tenants with stricter isolation
 - Cloud-to-Device command queue
 - MQTT/EMQX as an additional transport
 - Redis for presence and fan-out

@@ -95,8 +95,8 @@ onMounted(() => {
         <span>动作</span>
         <select v-model="filters.action">
           <option value="">全部</option>
-          <option value="ON">ON</option>
-          <option value="OFF">OFF</option>
+          <option value="ON">开启</option>
+          <option value="OFF">关闭</option>
         </select>
       </label>
       <label>
@@ -106,7 +106,7 @@ onMounted(() => {
           <option value="ANDROID">Android</option>
           <option value="WEB">Web</option>
           <option value="ELECTRON">Electron</option>
-          <option value="SYSTEM">System</option>
+          <option value="SYSTEM">系统</option>
         </select>
       </label>
       <label>
@@ -157,7 +157,7 @@ onMounted(() => {
       </div>
 
       <div v-if="eventStore.total > 0" class="pagination">
-        <span>{{ startItem }}–{{ endItem }} of {{ eventStore.total }}</span>
+        <span>{{ startItem }}–{{ endItem }} / 共 {{ eventStore.total }} 条</span>
         <div>
           <button
             class="button button-secondary"

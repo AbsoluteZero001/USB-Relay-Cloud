@@ -143,6 +143,55 @@ class RelayEventPersistenceServiceTest {
                 .isEqualTo(latest.event().getId());
     }
 
+    /**
+     * spec §19：FAILED 事件不得更新 relay_state。
+     * 先以 SUCCESS 写入 ON，再以 FAILED 提交 OFF，
+     * 状态应仍保持 SUCCESS 那一条。
+     */
+    @Test
+    void failedEventDoesNotUpdateRelayState() {
+        String successEventId =
+                "00000000-0000-4000-8000-000000000010";
+        String failedEventId =
+                "00000000-0000-4000-8000-000000000011";
+
+        persistenceService.recordEvent(
+                "relay-001",
+                event(
+                        successEventId,
+                        RelayAction.ON,
+                        RelayStateValue.OFF,
+                        RelayStateValue.ON,
+                        CommandStatus.SUCCESS
+                )
+        );
+
+        EventPersistenceResult failedResult = persistenceService.recordEvent(
+                "relay-001",
+                event(
+                        failedEventId,
+                        RelayAction.OFF,
+                        RelayStateValue.ON,
+                        RelayStateValue.OFF,
+                        CommandStatus.FAILED
+                )
+        );
+
+        // FAILED 事件本身仍然记录到 relay_event
+        assertThat(failedResult.created()).isTrue();
+        assertThat(relayEventMapper.selectByEventId(failedEventId))
+                .isNotNull();
+
+        // 但 relay_state 应仍指向 SUCCESS 那一条
+        RelayStateEntity state =
+                relayStateMapper.selectByDeviceChannel("relay-001", 1);
+        assertThat(state.getCommandedState())
+                .isEqualTo(RelayStateValue.ON);
+        assertThat(state.getCommandStatus())
+                .isEqualTo(CommandStatus.SUCCESS);
+        assertThat(state.getLastEventId()).isEqualTo(successEventId);
+    }
+
     private RelayEventCreateRequest event(
             String eventId,
             RelayAction action,

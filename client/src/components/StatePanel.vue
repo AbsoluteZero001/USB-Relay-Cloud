@@ -3,7 +3,7 @@ import {Activity, CircleHelp, Clock3, Power, Radio,} from "@lucide/vue";
 import {computed} from "vue";
 
 import type {Device, RelayState} from "@/types/api";
-import {commandStatusLabel, formatDateTime, formatRelativeTime, onlineLabel,} from "@/utils/format";
+import {commandStatusLabel, formatDateTime, formatRelativeTime, onlineLabel, stateLabel,} from "@/utils/format";
 
 const props = defineProps<{
   device: Device | null;
@@ -41,8 +41,8 @@ const commandStatus = computed(
           <Power :size="28" />
         </span>
         <div>
-          <span>最后指令</span>
-          <strong>{{ commandLabel }}</strong>
+          <span>最近指令</span>
+          <strong>{{ stateLabel(commandLabel) }}</strong>
         </div>
       </div>
 

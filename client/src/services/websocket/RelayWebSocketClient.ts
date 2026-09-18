@@ -4,6 +4,7 @@ import type {RelayWebSocketMessage, WebSocketStatus,} from "@/types/api";
 
 type MessageListener = (message: RelayWebSocketMessage) => void;
 type StatusListener = (status: WebSocketStatus) => void;
+type TokenProvider = () => string | null;
 
 const INITIAL_RECONNECT_DELAY_MS = 1_000;
 const MAX_RECONNECT_DELAY_MS = 30_000;
@@ -15,11 +16,13 @@ export class RelayWebSocketClient {
   private intentionallyClosed = false;
   private status: WebSocketStatus = "idle";
   private afterSequence = 0;
+    private authenticated = false;
   private readonly messageListeners = new Set<MessageListener>();
   private readonly statusListeners = new Set<StatusListener>();
 
     constructor(
         private readonly baseUrl: string | (() => string),
+        private readonly getToken: TokenProvider = () => null,
     ) {
     }
 
@@ -35,12 +38,17 @@ export class RelayWebSocketClient {
     this.clearReconnectTimer();
     this.socket?.close(1000, "client shutdown");
     this.socket = null;
+      this.authenticated = false;
     this.setStatus("disconnected");
   }
 
   updateAfterSequence(sequence: number): void {
     this.afterSequence = Math.max(this.afterSequence, sequence);
   }
+
+    isAuthenticated(): boolean {
+        return this.authenticated;
+    }
 
   onMessage(listener: MessageListener): () => void {
     this.messageListeners.add(listener);
@@ -61,6 +69,14 @@ export class RelayWebSocketClient {
     if (this.socket?.readyState === WebSocket.OPEN) {
       return;
     }
+      const token = this.getToken();
+      if (!token) {
+          // 未登录时不连接；由调用方在登录后再次调用 connect()
+          this.authenticated = false;
+          this.setStatus("disconnected");
+          return;
+      }
+      this.authenticated = false;
     this.setStatus(
       this.reconnectAttempt === 0 ? "connecting" : "reconnecting",
     );
@@ -71,6 +87,9 @@ export class RelayWebSocketClient {
     socket.addEventListener("open", () => {
       if (socket !== this.socket) return;
       this.reconnectAttempt = 0;
+        // 立即发送 AUTH 帧；服务端验证通过后才会推送业务数据
+        this.sendAuthFrame(token);
+        // 连接已建立但未认证；等收到 AUTHENTICATED 才视为真正可用
       this.setStatus("connected");
     });
 
@@ -78,6 +97,25 @@ export class RelayWebSocketClient {
       if (typeof event.data !== "string") return;
       try {
         const message = parseRelayWebSocketMessage(event.data);
+          if (message.type === "AUTHENTICATED") {
+              this.authenticated = true;
+              for (const listener of this.messageListeners) {
+                  listener(message);
+              }
+              return;
+          }
+          if (message.type === "AUTH_FAILED") {
+              console.warn(
+                  "WebSocket AUTH_FAILED:",
+                  message.message ?? "token rejected",
+              );
+              this.authenticated = false;
+              // 鉴权失败不重连，避免循环；交由上层处理（重新登录）
+              this.intentionallyClosed = true;
+              socket.close(1008, "auth failed");
+              this.setStatus("disconnected");
+              return;
+          }
         if (typeof message.sequence === "number") {
           this.updateAfterSequence(message.sequence);
         }
@@ -92,6 +130,7 @@ export class RelayWebSocketClient {
     socket.addEventListener("close", () => {
       if (socket !== this.socket) return;
       this.socket = null;
+        this.authenticated = false;
       if (this.intentionallyClosed) {
         this.setStatus("disconnected");
         return;
@@ -103,6 +142,11 @@ export class RelayWebSocketClient {
       socket.close();
     });
   }
+
+    private sendAuthFrame(token: string): void {
+        const frame = JSON.stringify({type: "AUTH", token});
+        this.socket?.send(frame);
+    }
 
   private scheduleReconnect(): void {
     this.setStatus("reconnecting");

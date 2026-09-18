@@ -1,5 +1,6 @@
 import axios, {AxiosError, type AxiosResponse} from "axios";
 
+import {getStoredToken} from "@/config/authStorage";
 import {getApiBaseUrl} from "@/config/runtimeConfig";
 import type {ApiResponse} from "@/types/api";
 
@@ -27,6 +28,16 @@ export const http = axios.create({
   headers: {
     "Content-Type": "application/json",
   },
+});
+
+// JWT 拦截器：所有 REST 请求自动附加 Authorization: Bearer <token>
+http.interceptors.request.use((config) => {
+    const token = getStoredToken();
+    if (token) {
+        config.headers = config.headers ?? {};
+        config.headers.Authorization = `Bearer ${token}`;
+    }
+    return config;
 });
 
 function readErrorResponse(error: AxiosError<ApiResponse<unknown>>): ApiError {

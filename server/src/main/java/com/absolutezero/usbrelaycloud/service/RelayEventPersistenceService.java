@@ -1,5 +1,6 @@
 package com.absolutezero.usbrelaycloud.service;
 
+import com.absolutezero.usbrelaycloud.common.enums.CommandStatus;
 import com.absolutezero.usbrelaycloud.dto.RelayEventCreateRequest;
 import com.absolutezero.usbrelaycloud.entity.RelayEventEntity;
 import com.absolutezero.usbrelaycloud.mapper.DeviceMapper;
@@ -77,15 +78,20 @@ public class RelayEventPersistenceService {
 
         RelayEventEntity persisted =
                 relayEventMapper.selectByEventId(request.eventId());
-        relayStateMapper.upsertLastCommand(
-                deviceId,
-                request.channel(),
-                request.currentState(),
-                request.commandStatus(),
-                request.eventId(),
-                persisted.getId(),
-                now
-        );
+        // 仅 commandStatus = SUCCESS 才更新 relay_state；
+        // FAILED 事件不污染设备状态（spec §19，hardwareState 在无硬件
+        // 回读前必须保持 UNKNOWN）。
+        if (request.commandStatus() == CommandStatus.SUCCESS) {
+            relayStateMapper.upsertLastCommand(
+                    deviceId,
+                    request.channel(),
+                    request.currentState(),
+                    request.commandStatus(),
+                    request.eventId(),
+                    persisted.getId(),
+                    now
+            );
+        }
         return new EventPersistenceResult(persisted, true);
     }
 }
