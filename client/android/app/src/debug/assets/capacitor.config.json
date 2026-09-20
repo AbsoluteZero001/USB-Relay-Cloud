@@ -1,0 +1,8 @@
+{
+  "appId": "com.absolutezero.usbrelaycloud",
+  "appName": "USB Relay Cloud",
+  "webDir": "dist",
+  "android": {
+    "allowMixedContent": true
+  }
+}
