@@ -260,7 +260,23 @@ DB_PASSWORD                       # 与 B.4 中设置的密码一致
 JWT_SECRET                       # >= 32 字符，openssl rand -base64 48
 APP_BOOTSTRAP_ADMIN_USERNAME
 APP_BOOTSTRAP_ADMIN_PASSWORD
-APP_CORS_ALLOWED_ORIGINS          # 实际域名，生产不要用 *
+APP_CORS_ALLOWED_ORIGINS          # Web 实际域名，生产不要用 *（Android App Origin 内置放行）
+```
+
+关于 CORS 与健康检查：
+
+- `APP_CORS_ALLOWED_ORIGINS` 只影响浏览器端来源；Capacitor Android App 的
+  WebView Origin（`https://localhost` / `http://localhost` /
+  `capacitor://localhost`）由 `CorsConfig.BUILT_IN_ORIGINS` 内置放行，
+  不需要（也不应该）写进环境变量。
+- 公开健康检查有两套等价路径：`GET /api/health` 与 `GET /api/public/health`，
+  均无需 Authorization，可直接用于客户端「测试连接」。
+- 升级 JAR 后必须重启服务，否则新 Security / CORS 配置不生效：
+
+```bash
+sudo cp target/usb-relay-cloud-server-*.jar \
+     /opt/usb-relay-cloud/usb-relay-cloud-server.jar
+sudo systemctl restart usb-relay-cloud
 ```
 
 ### B.6 安装 systemd 服务

@@ -2,6 +2,10 @@
   "appId": "com.absolutezero.usbrelaycloud",
   "appName": "USB Relay Cloud",
   "webDir": "dist",
+  "server": {
+    "hostname": "localhost",
+    "androidScheme": "https"
+  },
   "android": {
     "allowMixedContent": true
   }

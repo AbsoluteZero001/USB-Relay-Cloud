@@ -23,10 +23,10 @@ USB Relay Cloud 将本地 USB 继电器硬件接入云端，实现多客户端�
 
 | 项                            | 结果                    |
 |------------------------------|-----------------------|
-| Backend Maven test           | 27/27 passed ✅        |
+| Backend Maven test           | 42/42 passed ✅        |
 | Backend Maven package        | BUILD SUCCESS ✅       |
 | Frontend typecheck           | passed ✅              |
-| Frontend Vitest              | 65/65 passed ✅        |
+| Frontend Vitest              | 76/76 passed ✅        |
 | Frontend Vite build          | passed ✅              |
 | Android cap sync             | passed ✅              |
 | Android Gradle assembleDebug | BUILD SUCCESSFUL ✅    |
@@ -451,8 +451,26 @@ UI 直接提示「当前浏览器不支持 Web Serial，请使用最新版 Chrom
 - REST 与 WebSocket 都由同一个根地址派生：`https://host` → `https://host/api` 与 `wss://host/ws/relay`
 - 所有请求在发起时动态读取地址（`getApiBaseUrl()`），保存后立即生效，不需要重启或重新安装 APK
 - 切换服务器（host/origin 变化）时清除旧 access token 并断开 WebSocket，回到登录页；`serverUrl` 本身保留
-- 连通性自检使用公开接口 `GET /api/health`（Spring Security `permitAll`），不需要 Token
-- 网络错误细分提示：DNS 解析失败 / 连接被拒绝 / 连接超时 / HTTPS 证书错误 / CORS 或网络不可达 / 401 / 403 / 5xx
+- 连通性自检使用公开接口，不需要 Token、不携带 Authorization：
+  `GET /api/health`（=`/api/health/` = `/api/public/health`）
+- 测试结果按真实 HTTP 状态分类：`200 + status=UP` → 连接成功；
+  `401` → 「服务器可以访问，但健康检查接口需要认证，请检查服务端安全配置」；
+  `403` → CORS / 来源白名单问题；5xx、DNS、连接被拒绝、超时、证书错误分别提示
+- 健康检查使用独立的 axios 实例（无 JWT 拦截器、无 401 自动登出），
+  不会被包装成 NetworkError
+
+服务端 CORS 与 Android App 来源：
+
+- Capacitor Android WebView 的请求 Origin 固定为 `https://localhost`
+  （默认 `androidScheme=https` + `hostname=localhost`，本项目在
+  `client/capacitor.config.ts` 中已显式声明）
+- 服务端 `CorsConfig` 在 `APP_CORS_ALLOWED_ORIGINS` 之外**内置放行**
+  `https://localhost` / `http://localhost` / `capacitor://localhost`
+  与本地 Vite 开发地址，避免「浏览器能访问、App 被 CORS 403 拒绝」
+- 预检允许 `GET/POST/PUT/PATCH/DELETE/OPTIONS` 与
+  `Authorization/Content-Type/Accept/Origin/X-Requested-With`
+- `allowCredentials=true` 时使用 `allowedOriginPatterns`（回显来源），
+  不会产生 `Access-Control-Allow-Origin: *` 的非法组合
 
 构建 Android APK 默认地址：
 
@@ -467,7 +485,7 @@ UI 直接提示「当前浏览器不支持 Web Serial，请使用最新版 Chrom
 
 ```powershell
 cd server
-mvn clean test          # 27 tests
+mvn clean test          # 42 tests
 mvn clean package       # BUILD SUCCESS, JAR: server/target/usb-relay-cloud-server-0.1.0-SNAPSHOT.jar
 ```
 
@@ -476,7 +494,7 @@ mvn clean package       # BUILD SUCCESS, JAR: server/target/usb-relay-cloud-serv
 ```powershell
 cd client
 npm run typecheck       # vue-tsc --noEmit
-npm test -- --run       # 65 tests
+npm test -- --run       # 76 tests
 npm run build           # vite build
 ```
 
