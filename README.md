@@ -26,7 +26,7 @@ USB Relay Cloud 将本地 USB 继电器硬件接入云端，实现多客户端�
 | Backend Maven test           | 27/27 passed ✅        |
 | Backend Maven package        | BUILD SUCCESS ✅       |
 | Frontend typecheck           | passed ✅              |
-| Frontend Vitest              | 36/36 passed ✅        |
+| Frontend Vitest              | 65/65 passed ✅        |
 | Frontend Vite build          | passed ✅              |
 | Android cap sync             | passed ✅              |
 | Android Gradle assembleDebug | BUILD SUCCESSFUL ✅    |
@@ -301,6 +301,7 @@ cd client
 npm run build
 npx cap sync android
 cd android
+$env:ANDROID_HOME="<YOUR_ANDROID_SDK>"   # 或写入 android/local.properties
 .\gradlew.bat assembleDebug
 ```
 
@@ -309,6 +310,11 @@ APK 输出路径：
 ```text
 client/android/app/build/outputs/apk/debug/app-debug.apk
 ```
+
+`debug` APK 使用内嵌 `dist` 静态资源，首次安装默认服务器地址为 `https://relay.evezero.cn`
+（见 §13.4），可在登录页「服务器设置」中随时改成局域网地址后重新登录。
+
+USB 扫描 / 授权 / 开关继电器的真机验收步骤见 §13.2。
 
 ## 10. 环境变量
 
@@ -366,14 +372,94 @@ Flyway migration 位于 `server/src/main/resources/db/migration/`。
 - **管理员账号**：首次启动 `sys_user` 为空时通过环境变量创建（BCrypt 哈希）
 - **Spring Boot / MySQL 不暴露公网**：Native 部署仅监听 127.0.0.1，外部通过 Nginx
 
-## 13. Web Serial
+## 13. 本地硬件与服务器配置
+
+### 13.1 平台矩阵（四种运行环境，四种 USB 接口）
+
+同一套 Vue 代码在四个环境里运行，**绝不能混用同一种 USB 接口**：
+
+| 运行环境                  | 平台判定                                   | USB 链路                                                            |
+|-----------------------|----------------------------------------|-------------------------------------------------------------------|
+| Capacitor Android App | `Capacitor.isNativePlatform() === true` | `AndroidUsbRelayAdapter` → Kotlin `UsbRelayPlugin` → `UsbManager` → `usb-serial-for-android` |
+| PC 浏览器（Chrome / Edge） | `web`                                  | `WebSerialRelayAdapter` → `navigator.serial`（仅已授权设备 + 手势选择）          |
+| Android WebView（非 Capacitor） | `web`                            | 没有 USB 能力，UI 明确提示改用 Android 客户端                                    |
+| Electron              | `window.desktopAPI.isElectron`          | `ElectronSerialRelayAdapter`（IPC 契约已就绪，串口实现待补）                     |
+
+Android App 内**不会**调用 `navigator.serial` / `navigator.usb`：Android WebView 没有 Web Serial，
+即使有也无法访问 USB Host。
+
+### 13.2 Android USB 链路
+
+```text
+Vue (LocalRelayPanel)
+  → RelayService.scanAndMatch()
+  → LocalRelayProvider
+  → AndroidUsbRelayAdapter
+  → Capacitor Plugin "UsbRelay" (Kotlin)
+  → UsbManager.getDeviceList()
+  → UsbSerialProber.getDefaultProber()  (驱动识别)
+  → UsbSerialPort.open() / write()
+  → CH340 → LCUS-1
+```
+
+要点：
+
+- 扫描结果包含 `deviceId / vendorId / productId / manufacturer / productName / serialNumber /
+  driverName / supported / hasPermission`，`UsbManager` 能看到的设备**一定**会出现在列表里；
+  没有兼容串口驱动时显示「检测到 USB 设备，但未找到兼容串口驱动」，而不是空列表。
+- CH340 识别优先使用 `UsbSerialProber`，其次才回退到 VID/PID；驱动名为 CH340/CH341 时即使
+  PID 是变体也能匹配 LCUS-1 配置。
+- 权限流程：扫描 → 选择设备 → `connect()` → `UsbManager.hasPermission()` → 未授权则弹出系统
+  授权对话框（`PendingIntent.FLAG_IMMUTABLE`）→ 授权成功后 `openDevice()`；权限不会被假定为永久有效。
+- 插拔：Kotlin 侧注册 `ACTION_USB_DEVICE_ATTACHED` / `ACTION_USB_DEVICE_DETACHED`（`RECEIVER_NOT_EXPORTED`），
+  插入自动重新扫描，拔出关闭串口并刷新 UI，不需要重启 App。
+- 调试日志：Android Logcat 统一 TAG `UsbRelay`；前端「本地硬件 → 调试信息」可查看同一批关键事件
+  （平台、设备数、VID/PID、驱动、权限、打开/写入结果与原始异常）。
+- 明文流量：`debug` 构建允许 `http://192.168.x.x:8080` 局域网调试；`release` 构建保持
+  `usesCleartextTraffic=false`，默认只允许 HTTPS。
+
+### 13.3 Web Serial 限制
 
 Web Serial API 需要：
 
 - Chrome / Edge 浏览器
 - HTTPS secure context（或 `localhost` 开发例外）
 
+浏览器不允许网页枚举系统里全部串口：
+
+- 「扫描已授权设备」= `navigator.serial.getPorts()`，只能拿到用户此前授权过的端口
+- 「选择串口设备」= `navigator.serial.requestPort()`，必须在用户点击事件中调用，会弹出浏览器原生选择窗口
+
+页面加载 / 定时器 / WebSocket 回调里**不会**自动调用 `requestPort()`。浏览器不支持 Web Serial 时，
+UI 直接提示「当前浏览器不支持 Web Serial，请使用最新版 Chrome / Edge，或者使用 Android / Electron 客户端」。
+
 局域网 HTTP（如 `http://192.168.x.x:5173`）可能无法使用 Web Serial。这是浏览器安全限制，不是程序 Bug。
+
+### 13.4 服务器地址配置（登录前可修改）
+
+登录页提供「服务器设置」入口，**不依赖登录状态**：Token 失效、401/403/500、DNS 失败、连接失败时都能进入。
+
+优先级（唯一实现在 `client/src/config/runtimeConfig.ts`）：
+
+```text
+用户保存的 serverUrl  >  VITE_DEFAULT_SERVER_BASE_URL  >  平台默认值
+                                                     ├─ Android：DEFAULT_SERVER_URL = https://relay.evezero.cn
+                                                     └─ Web：当前页面同源地址（/api、/ws/relay）
+```
+
+- 地址持久化到 WebView/浏览器的 localStorage，关闭 App、重启手机后依然存在
+- REST 与 WebSocket 都由同一个根地址派生：`https://host` → `https://host/api` 与 `wss://host/ws/relay`
+- 所有请求在发起时动态读取地址（`getApiBaseUrl()`），保存后立即生效，不需要重启或重新安装 APK
+- 切换服务器（host/origin 变化）时清除旧 access token 并断开 WebSocket，回到登录页；`serverUrl` 本身保留
+- 连通性自检使用公开接口 `GET /api/health`（Spring Security `permitAll`），不需要 Token
+- 网络错误细分提示：DNS 解析失败 / 连接被拒绝 / 连接超时 / HTTPS 证书错误 / CORS 或网络不可达 / 401 / 403 / 5xx
+
+构建 Android APK 默认地址：
+
+```text
+不设置 VITE_DEFAULT_SERVER_BASE_URL → Android 首装默认 https://relay.evezero.cn
+设置 VITE_DEFAULT_SERVER_BASE_URL   → 覆盖为自定义默认值（仅默认值，用户保存值永远优先）
+```
 
 ## 14. 测试
 
@@ -390,7 +476,7 @@ mvn clean package       # BUILD SUCCESS, JAR: server/target/usb-relay-cloud-serv
 ```powershell
 cd client
 npm run typecheck       # vue-tsc --noEmit
-npm test -- --run       # 36 tests
+npm test -- --run       # 65 tests
 npm run build           # vite build
 ```
 

@@ -1,4 +1,5 @@
 <script setup lang="ts">
+import {Settings} from "@lucide/vue";
 import {computed, ref, watch} from "vue";
 import {useRouter} from "vue-router";
 
@@ -58,6 +59,13 @@ const progressLabel = computed(() =>
     stage.value === "idle" ? "" : STAGE_LABEL[stage.value],
 );
 const progressVisible = computed(() => stage.value !== "idle");
+
+/** 登录页直接显示当前生效的服务器地址，避免用户不知道连的是哪台服务器。 */
+const currentServerLabel = computed(
+    () => serverConfig.effectiveServerBaseUrl
+        || serverConfig.apiBaseUrl
+        || "当前页面同源地址",
+);
 
 function advanceStage(next: LoginStage): void {
   // 阶段只增不减，避免真实状态短暂抖动导致进度回退。
@@ -239,9 +247,13 @@ function goToServerSettings(): void {
           class="login__server-settings"
           @click="goToServerSettings"
       >
-        ⚙ 服务器设置
+        <Settings :size="14"/>
+        服务器设置
       </button>
-    </form>
+      <p class="login__server-current">
+        当前服务器：{{ currentServerLabel }}
+      </p>
+</form>
   </main>
 </template>
 
@@ -385,6 +397,10 @@ function goToServerSettings(): void {
 }
 
 .login__server-settings {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 0.3rem;
   background: none;
   border: none;
   color: #6b7280;
@@ -398,5 +414,13 @@ function goToServerSettings(): void {
 .login__server-settings:hover {
   color: #374151;
   background: #f3f4f6;
+}
+
+.login__server-current {
+  margin: -0.5rem 0 0;
+  text-align: center;
+  font-size: 0.72rem;
+  color: #9ca3af;
+  word-break: break-all;
 }
 </style>

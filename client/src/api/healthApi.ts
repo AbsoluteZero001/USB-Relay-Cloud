@@ -1,12 +1,17 @@
 import axios, {type AxiosError} from "axios";
 
 import {getApiBaseUrl} from "@/config/runtimeConfig";
+import {classifyNetworkError, networkFailureMessage} from "./networkErrors";
 import type {ApiResponse} from "@/types/api";
 
 export type ConnectionTestStatus =
     | "ok"
     | "auth_failed"
+    | "forbidden"
+    | "server_error"
     | "unreachable"
+    | "dns_error"
+    | "refused"
     | "timeout"
     | "ssl_error"
     | "error";
@@ -38,34 +43,40 @@ export async function testServerConnection(
     } catch (error) {
         if (axios.isAxiosError(error)) {
             const axiosError = error as AxiosError<ApiResponse<unknown>>;
-            if (axiosError.response?.status === 401) {
+            const httpStatus = axiosError.response?.status;
+            if (httpStatus === 401) {
                 return {status: "auth_failed"};
             }
-            if (
-                axiosError.code === "ECONNABORTED" ||
-                axiosError.code === "ETIMEDOUT"
-            ) {
-                return {status: "timeout"};
+            if (httpStatus === 403) {
+                return {status: "forbidden", message: "服务器返回 403（无访问权限）"};
             }
-            if (
-                axiosError.code === "ERR_NETWORK" &&
-                (axiosError.message.includes("SSL") ||
-                    axiosError.message.includes("certificate") ||
-                    axiosError.message.includes("TLS") ||
-                    axiosError.message.includes("HTTPS"))
-            ) {
+            if (httpStatus && httpStatus >= 500) {
                 return {
-                    status: "ssl_error",
-                    message: "SSL / HTTPS 握手失败",
+                    status: "server_error",
+                    message: `服务器返回 ${httpStatus}（服务端错误）`,
                 };
             }
-            if (axiosError.response) {
+            if (httpStatus) {
                 return {
                     status: "error",
-                    message: `服务器返回 ${axiosError.response.status}`,
+                    message: `服务器返回 ${httpStatus}`,
                 };
             }
-            return {status: "unreachable"};
+            // 无响应：细分 DNS / 连接拒绝 / 超时 / 证书 / CORS
+            const kind = classifyNetworkError(axiosError);
+            const message = networkFailureMessage(kind);
+            switch (kind) {
+                case "dns":
+                    return {status: "dns_error", message};
+                case "refused":
+                    return {status: "refused", message};
+                case "timeout":
+                    return {status: "timeout", message};
+                case "ssl":
+                    return {status: "ssl_error", message};
+                default:
+                    return {status: "unreachable", message};
+            }
         }
         return {status: "unreachable"};
     }
@@ -76,11 +87,19 @@ export function connectionTestLabel(outcome: ConnectionTestOutcome): string {
         case "ok":
             return "连接成功";
         case "auth_failed":
-            return "认证失败";
+            return "服务器返回 401（认证失败）";
+        case "forbidden":
+            return outcome.message ?? "服务器返回 403（无访问权限）";
+        case "server_error":
+            return outcome.message ?? "服务器返回 5xx（服务端错误）";
         case "unreachable":
-            return "服务器不可达";
+            return outcome.message ?? "服务器不可达";
+        case "dns_error":
+            return outcome.message ?? "DNS 解析失败";
+        case "refused":
+            return outcome.message ?? "无法连接服务器（连接被拒绝）";
         case "timeout":
-            return "请求超时";
+            return outcome.message ?? "连接超时";
         case "ssl_error":
             return outcome.message ?? "SSL / HTTPS 错误";
         case "error":

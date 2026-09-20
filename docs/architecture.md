@@ -170,16 +170,51 @@ Reconnect uses exponential backoff with a 30 second cap.
 
 ```text
 RelayService
-  ├── CloudRelayProvider
-  │     └── reserved for future Cloud -> Device commands
-  └── LocalRelayProvider
-        ├── AndroidUsbRelayAdapter
-        ├── ElectronSerialRelayAdapter
-        └── WebSerialRelayAdapter
+  ├── LocalRelayProvider          (hardware layer: the only USB owner)
+  │     ├── AndroidUsbRelayAdapter
+  │     ├── ElectronSerialRelayAdapter
+  │     └── WebSerialRelayAdapter
+  └── CloudRelayProvider
+        └── reserved for future Cloud -> Device commands (phase one: unavailable)
 ```
 
 `CloudRelayProvider` intentionally rejects command execution in phase one.
 It is an extension point, not a completed remote-control feature.
+Cloud sync is a separate responsibility handled by `RelayService` (REST event
+upload + `EventOutbox` retry queue) and `RelayWebSocketClient` (receive-only
+broadcast sync); neither may take over hardware control.
+
+Hardware layer rules:
+
+- only `LocalRelayProvider` may open, close or write the serial port
+- the local USB write happens **before** any REST call; a failed write never
+  produces a SUCCESS event
+- the adapter is chosen by platform (`Capacitor Android` / `Electron` / browser),
+  never by feature detection of `navigator.serial`
+- scan results always carry `driverName`, `supported` and `hasPermission`, so the
+  UI can distinguish "no device", "device without a serial driver", "device
+  without USB permission" and "unsupported hardware profile"
+
+## 6.1 Runtime Server Configuration
+
+The cloud endpoint is runtime data, not build-time business logic:
+
+```text
+serverConfigStore
+  └── runtimeConfig.ts
+        ├── getConfiguredServerBaseUrl()   (user saved, localStorage)
+        ├── getDefaultServerBaseUrl()      (VITE_DEFAULT_SERVER_BASE_URL
+        │                                   or Android DEFAULT_SERVER_URL)
+        ├── getApiBaseUrl()                (<root>/api)
+        └── getWebSocketBaseUrl()          (http -> ws, https -> wss, /ws/relay)
+```
+
+- every axios call reads `getApiBaseUrl()` at request time, so saving a new
+  address takes effect immediately without restarting the app
+- the server settings page is a public route; connection testing uses the public
+  `GET /api/health` endpoint and never needs a token
+- changing host/origin clears the stored JWT (it belongs to the old server),
+  disconnects the WebSocket and returns to the login page
 
 ## 7. Security Boundary
 

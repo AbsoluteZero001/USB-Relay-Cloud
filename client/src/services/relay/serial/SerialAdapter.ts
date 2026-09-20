@@ -1,4 +1,5 @@
 import type {
+  SerialDeviceChange,
   SerialOpenOptions,
   SerialPortInfo,
   SerialStatus,
@@ -18,6 +19,19 @@ export interface SerialAdapter {
   send(data: Uint8Array): Promise<void>;
 
   getStatus(): SerialStatus;
+
+  /**
+   * USB 插拔监听（可选能力）。
+   *
+   * Android：Capacitor 插件广播 deviceAttached / deviceDetached。
+   * Web：navigator.serial 的 connect / disconnect 事件。
+   * Electron：暂未提供。
+   *
+   * Provider 依赖该回调在插入后自动重新扫描、拔出后关闭串口并刷新 UI。
+   */
+  onDeviceChange?(
+    listener: (change: SerialDeviceChange) => void,
+  ): () => void;
 }
 
 export interface RequestableSerialAdapter extends SerialAdapter {

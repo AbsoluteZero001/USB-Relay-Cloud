@@ -201,13 +201,11 @@ const wsBaseUrl = computed(() => serverConfig.wsBaseUrl);
         </div>
         <div>
           <dt>当前来源</dt>
-          <dd>
-            {{
-              serverConfig.isCustomized
-                  ? "本地已保存"
-                  : "构建时默认值"
-            }}
-          </dd>
+          <dd>{{ serverConfig.sourceLabel }}</dd>
+        </div>
+        <div v-if="serverConfig.isAndroidNative">
+          <dt>Android 默认值</dt>
+          <dd>{{ serverConfig.platformDefaultServerUrl }}</dd>
         </div>
       </dl>
     </div>

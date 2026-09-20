@@ -1,6 +1,11 @@
 import {describe, expect, it} from "vitest";
 
-import {LCUS1_CH340_PROFILE, matchHardwareProfile, normalizeUsbId,} from "./HardwareProfile";
+import {
+    describeUnsupportedPort,
+    LCUS1_CH340_PROFILE,
+    matchHardwareProfile,
+    normalizeUsbId,
+} from "./HardwareProfile";
 import type {SerialPortInfo} from "../serial/types";
 
 function port(vid: unknown, pid: unknown): SerialPortInfo {
@@ -14,6 +19,9 @@ function port(vid: unknown, pid: unknown): SerialPortInfo {
         productId: pid as string | null,
         serialNumber: null,
         isCurrent: false,
+        driverName: null,
+        supported: false,
+        hasPermission: null,
     };
 }
 
@@ -75,5 +83,43 @@ describe("matchHardwareProfile", () => {
         expect(matchHardwareProfile(port("9999", "0001"))).toBeNull();
         expect(matchHardwareProfile(port(null, "7523"))).toBeNull();
         expect(matchHardwareProfile(port("1A86", null))).toBeNull();
+    });
+});
+
+describe("matchHardwareProfile driver fallback", () => {
+    it("recognizes CH340 by driver name when the PID is an unknown variant", () => {
+        const p = port("1A86", "5523");
+        p.driverName = "CH340";
+        p.supported = true;
+
+        expect(matchHardwareProfile(p)).toBe(LCUS1_CH340_PROFILE);
+    });
+
+    it("recognizes a CH340 driver without a reported PID", () => {
+        const p = port("1A86", null);
+        p.driverName = "Ch34xSerialDriver";
+        p.supported = true;
+
+        expect(matchHardwareProfile(p)).toBe(LCUS1_CH340_PROFILE);
+    });
+
+    it("does not treat other USB serial drivers as LCUS-1", () => {
+        const p = port("10C4", "EA60");
+        p.driverName = "CP210x";
+        p.supported = true;
+
+        expect(matchHardwareProfile(p)).toBeNull();
+    });
+
+    it("explains devices without a compatible serial driver", () => {
+        const unknown = port("9999", "0001");
+        expect(describeUnsupportedPort(unknown))
+            .toBe("检测到 USB 设备，但未找到兼容串口驱动");
+
+        const unsupportedDriver = port("10C4", "EA60");
+        unsupportedDriver.driverName = "CP210x";
+        unsupportedDriver.supported = true;
+        expect(describeUnsupportedPort(unsupportedDriver))
+            .toBe("检测到串口设备（驱动 CP210x），但未匹配到 LCUS-1 硬件配置");
     });
 });

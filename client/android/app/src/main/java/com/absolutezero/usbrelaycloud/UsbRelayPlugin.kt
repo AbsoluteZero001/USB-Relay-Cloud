@@ -11,6 +11,7 @@ import android.hardware.usb.UsbManager
 import android.os.Handler
 import android.os.Looper
 import android.util.Base64
+import android.util.Log
 import androidx.core.content.ContextCompat
 import com.getcapacitor.JSArray
 import com.getcapacitor.JSObject
@@ -29,6 +30,7 @@ import java.util.concurrent.atomic.AtomicBoolean
 
 private const val ACTION_USB_PERMISSION =
     "com.absolutezero.usbrelaycloud.USB_PERMISSION"
+private const val TAG = "UsbRelay"
 private const val CH340_VENDOR_ID = 0x1A86
 private const val CH340_PRODUCT_ID = 0x7523
 private const val PERMISSION_REQUEST_CODE = 7523
@@ -108,14 +110,28 @@ class UsbRelayPlugin : Plugin() {
 
             when (intent.action) {
                 UsbManager.ACTION_USB_DEVICE_ATTACHED -> {
+                    Log.i(
+                        TAG,
+                        "deviceAttached id=${device.deviceId} " +
+                            "vid=${hex4(device.vendorId)} " +
+                            "pid=${hex4(device.productId)}",
+                    )
                     notifyListeners(
                         "deviceAttached",
-                        JSObject().put("device", deviceToObject(device, null)),
+                        JSObject().put(
+                            "device",
+                            deviceToObject(usbManager, device, null),
+                        ),
                     )
                 }
 
                 UsbManager.ACTION_USB_DEVICE_DETACHED -> {
                     val wasCurrent = currentDeviceId == device.deviceId
+                    Log.w(
+                        TAG,
+                        "deviceDetached id=${device.deviceId} " +
+                            "wasCurrent=$wasCurrent",
+                    )
                     if (wasCurrent) {
                         closePortInternal()
                         currentDeviceId = null
@@ -133,7 +149,10 @@ class UsbRelayPlugin : Plugin() {
                     }
                     notifyListeners(
                         "deviceDetached",
-                        JSObject().put("device", deviceToObject(device, null)),
+                        JSObject().put(
+                            "device",
+                            deviceToObject(usbManager, device, null),
+                        ),
                     )
                 }
             }
@@ -164,6 +183,7 @@ class UsbRelayPlugin : Plugin() {
         val drivers = try {
             UsbSerialProber.getDefaultProber().findAllDrivers(manager)
         } catch (error: RuntimeException) {
+            Log.e(TAG, "findAllDrivers failed", error)
             return reject(
                 call,
                 "UNKNOWN_USB_ERROR",
@@ -171,16 +191,32 @@ class UsbRelayPlugin : Plugin() {
             )
         }
         val driversByDeviceId = drivers.associateBy { it.device.deviceId }
-        val devices = manager.deviceList.values.sortedWith(
+        val allDevices = try {
+            manager.deviceList.values.toList()
+        } catch (error: RuntimeException) {
+            Log.e(TAG, "UsbManager.deviceList failed", error)
+            return reject(
+                call,
+                "UNKNOWN_USB_ERROR",
+                error.message ?: "无法读取 USB 设备列表",
+            )
+        }
+        val devices = allDevices.sortedWith(
             compareByDescending<UsbDevice> {
                 driversByDeviceId.containsKey(it.deviceId)
             }.thenBy { it.deviceId },
         )
 
+        Log.i(
+            TAG,
+            "getDevices: usbManager=${allDevices.size} " +
+                "probedDrivers=${drivers.size}",
+        )
         val result = JSArray()
         for (device in devices) {
             result.put(
                 deviceToObject(
+                    manager,
                     device,
                     driversByDeviceId[device.deviceId],
                 ),
@@ -205,6 +241,7 @@ class UsbRelayPlugin : Plugin() {
         )
 
         if (manager.hasPermission(device)) {
+            Log.i(TAG, "requestPermission: already granted id=${device.deviceId}")
             state = "disconnected"
             errorCode = null
             errorDetail = null
@@ -225,6 +262,7 @@ class UsbRelayPlugin : Plugin() {
 
         pendingPermissionCall = call
         pendingPermissionDeviceId = device.deviceId
+        Log.i(TAG, "requestPermission: requesting id=${device.deviceId}")
         state = "waiting_permission"
         errorCode = "USB_PERMISSION_REQUIRED"
         errorDetail = "等待用户在 Android 系统中授权 USB 设备"
@@ -241,6 +279,7 @@ class UsbRelayPlugin : Plugin() {
         try {
             manager.requestPermission(device, pendingIntent)
         } catch (error: SecurityException) {
+            Log.e(TAG, "requestPermission failed", error)
             clearPendingPermission()
             state = "error"
             this.errorCode = "USB_PERMISSION_DENIED"
@@ -337,6 +376,13 @@ class UsbRelayPlugin : Plugin() {
             )
         }
         val flowControl = call.getString("flowControl") ?: "none"
+        Log.i(
+            TAG,
+            "open: id=${device.deviceId} vid=${hex4(device.vendorId)} " +
+                "pid=${hex4(device.productId)} driver=${driverName(driver)} " +
+                "baud=$requestedBaudRate dataBits=$dataBits " +
+                "stopBits=$stopBits parity=$requestedParity",
+        )
 
         closePortInternal()
         val openedConnection = manager.openDevice(device)
@@ -363,6 +409,7 @@ class UsbRelayPlugin : Plugin() {
                 openedPort.setFlowControl(nativeFlowControl)
             }
         } catch (error: UnsupportedOperationException) {
+            Log.e(TAG, "open: unsupported parameters", error)
             closePartialOpen(openedPort, openedConnection)
             return reject(
                 call,
@@ -370,6 +417,7 @@ class UsbRelayPlugin : Plugin() {
                 error.message ?: "当前串口设备不支持所选参数",
             )
         } catch (error: IllegalArgumentException) {
+            Log.e(TAG, "open: invalid parameters", error)
             closePartialOpen(openedPort, openedConnection)
             return reject(
                 call,
@@ -377,6 +425,7 @@ class UsbRelayPlugin : Plugin() {
                 error.message ?: "串口参数不合法",
             )
         } catch (error: IOException) {
+            Log.e(TAG, "open: IO error", error)
             closePartialOpen(openedPort, openedConnection)
             return reject(
                 call,
@@ -394,6 +443,7 @@ class UsbRelayPlugin : Plugin() {
         errorDetail = null
         manualClose = false
         startReadLoop()
+        Log.i(TAG, "open: success id=${device.deviceId}")
         notifyStatus()
         call.resolve()
     }
@@ -427,9 +477,11 @@ class UsbRelayPlugin : Plugin() {
 
         try {
             currentPort.write(bytes, WRITE_TIMEOUT_MS)
+            Log.i(TAG, "write: ${bytes.size} bytes ok")
             call.resolve()
         } catch (error: IOException) {
             val detail = error.message ?: "USB 串口写入失败"
+            Log.e(TAG, "write: failed", error)
             state = "error"
             errorCode = "SERIAL_WRITE_FAILED"
             errorDetail = detail
@@ -441,6 +493,7 @@ class UsbRelayPlugin : Plugin() {
 
     @PluginMethod
     fun close(call: PluginCall) {
+        Log.i(TAG, "close: manual disconnect")
         manualClose = true
         closePortInternal()
         currentDeviceId = null
@@ -500,6 +553,7 @@ class UsbRelayPlugin : Plugin() {
     }
 
     private fun handleReadFailure(error: IOException) {
+        Log.e(TAG, "read loop failed", error)
         closePortInternal()
         currentDeviceId = null
         state = "error"
@@ -556,10 +610,16 @@ class UsbRelayPlugin : Plugin() {
     }
 
     private fun deviceToObject(
+        manager: UsbManager?,
         device: UsbDevice,
         driver: UsbSerialDriver?,
     ): JSObject {
         val supported = driver != null && driver.ports.isNotEmpty()
+        val hasPermission = try {
+            manager?.hasPermission(device) == true
+        } catch (_: RuntimeException) {
+            false
+        }
         return JSObject()
             .put("deviceId", device.deviceId.toString())
             .put("vendorId", hex4(device.vendorId))
@@ -570,6 +630,7 @@ class UsbRelayPlugin : Plugin() {
             .put("driverName", driverName(driver))
             .put("portCount", driver?.ports?.size ?: 0)
             .put("supported", supported)
+            .put("hasPermission", hasPermission)
     }
 
     private fun statusToObject(): JSObject {

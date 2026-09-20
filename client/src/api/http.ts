@@ -2,6 +2,12 @@ import axios, {AxiosError, type AxiosResponse} from "axios";
 
 import {getStoredToken} from "@/config/authStorage";
 import {getApiBaseUrl} from "@/config/runtimeConfig";
+import {
+    classifyNetworkError,
+    isNetworkFailureCode,
+    networkFailureMessage,
+    type NetworkFailureKind,
+} from "./networkErrors";
 import type {ApiResponse} from "@/types/api";
 
 export class ApiError extends Error {
@@ -45,16 +51,19 @@ http.interceptors.request.use((config) => {
  * 401/403 等认证错误属于“有响应”的业务错误，不算网络不可达。
  */
 function isNetworkUnreachable(error: AxiosError<unknown>): boolean {
-    return (
-        !error.response &&
-        (error.code === "ERR_NETWORK" ||
-            error.code === "ECONNREFUSED" ||
-            error.code === "ENOTFOUND" ||
-            error.code === "ECONNABORTED" ||
-            error.code === "ETIMEDOUT" ||
-            error.code === "ERR_CONNECTION_TIMED_OUT")
-    );
+    if (error.response) return false;
+    // 无响应且没有具体 code（部分 WebView / 代理会这样抛）同样按网络层错误处理。
+    return !error.code || isNetworkFailureCode(error.code);
 }
+
+const NETWORK_ERROR_CODE: Record<NetworkFailureKind, string> = {
+    dns: "NETWORK_DNS_ERROR",
+    refused: "NETWORK_CONNECTION_REFUSED",
+    timeout: "NETWORK_TIMEOUT",
+    ssl: "NETWORK_SSL_ERROR",
+    cors: "NETWORK_CORS_OR_NETWORK_ERROR",
+    unreachable: "NETWORK_UNREACHABLE",
+};
 
 function readErrorResponse(error: AxiosError<ApiResponse<unknown>>): ApiError {
   const response = error.response;
@@ -69,10 +78,16 @@ function readErrorResponse(error: AxiosError<ApiResponse<unknown>>): ApiError {
   }
     // 无响应：网络不可达 / DNS / 超时 / SSL 等
     if (isNetworkUnreachable(error)) {
+        const kind = classifyNetworkError(error);
         return new ApiError(
-            "无法连接服务器，请检查服务器地址或网络连接。",
-            "NETWORK_UNREACHABLE",
+            networkFailureMessage(kind),
+            NETWORK_ERROR_CODE[kind],
             null,
+            {
+                kind,
+                axiosCode: error.code ?? null,
+                rawMessage: error.message,
+            },
         );
     }
   return new ApiError(
@@ -145,10 +160,7 @@ export function getApiErrorMessage(error: unknown): string {
  */
 export function isNetworkUnreachableError(error: unknown): boolean {
     if (error instanceof ApiError) {
-        return (
-            error.code === "NETWORK_UNREACHABLE" ||
-            error.code === "NETWORK_ERROR"
-        );
+        return error.code.startsWith("NETWORK_");
     }
     if (axios.isAxiosError(error)) {
         return isNetworkUnreachable(error);

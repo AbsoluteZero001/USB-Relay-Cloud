@@ -1,7 +1,16 @@
-import {matchHardwareProfile, type RelayHardwareProfile,} from "../hardware/HardwareProfile";
+import {
+    describeUnsupportedPort,
+    matchHardwareProfile,
+    type RelayHardwareProfile,
+} from "../hardware/HardwareProfile";
 import {type HardwareConnectionState, hardwareStateLabel, type HardwareStatus,} from "../hardware/HardwareStatus";
+import {formatHardwareError, hardwareLog} from "../diagnostics";
 import type {SerialAdapter} from "../serial/SerialAdapter";
-import type {SerialPortInfo, SerialStatus} from "../serial/types";
+import type {
+    SerialDeviceChange,
+    SerialPortInfo,
+    SerialStatus,
+} from "../serial/types";
 import type {RelayProvider, RelayProviderCommand, RelayProviderExecution,} from "./RelayProvider";
 
 import type {CommandStatus, EventSource, HardwareEventType, RelayAction, RelayStateValue,} from "@/types/api";
@@ -21,9 +30,7 @@ export type HardwareEventListener = (
 ) => void;
 
 function errorMessage(error: unknown): string {
-    if (error instanceof Error) return error.message;
-    if (typeof error === "string") return error;
-    return "本地 USB 操作失败";
+    return formatHardwareError(error) || "本地 USB 操作失败";
 }
 
 /**
@@ -56,6 +63,8 @@ export class LocalRelayProvider implements RelayProvider {
     private deviceId: string | null = null;
 
     private adapterSubscribed = false;
+    private deviceChangeSubscribed = false;
+    private lastHardwareEventKey: string | null = null;
     private readonly statusListeners = new Set<(status: SerialStatus) => void>();
     private readonly hardwareListeners = new Set<(status: HardwareStatus) => void>();
     private readonly hardwareEventListeners = new Set<HardwareEventListener>();
@@ -66,6 +75,13 @@ export class LocalRelayProvider implements RelayProvider {
   isAvailable(): boolean {
     return this.adapter.isSupported();
   }
+
+    /** 适配器是否支持「选择新设备」（Web Serial requestPort / Android 授权）。 */
+    supportsPortRequest(): boolean {
+        return typeof (this.adapter as SerialAdapter & {
+            requestPort?: unknown;
+        }).requestPort === "function";
+    }
 
     async listPorts(): Promise<SerialPortInfo[]> {
         const ports = await this.adapter.listPorts();
@@ -81,6 +97,13 @@ export class LocalRelayProvider implements RelayProvider {
     async scanAndMatch(): Promise<
         { port: SerialPortInfo; profile: RelayHardwareProfile | null }[]
     > {
+        this.trySubscribeDeviceChange();
+        // 重新扫描不能破坏已经建立的连接：只要当前串口仍在列表中，
+        // 扫描结束后必须回到 CONNECTED，而不是降级为 DETECTED。
+        const wasConnected = this.hardwareState === "CONNECTED";
+        const connectedPortId = wasConnected
+            ? this.adapter.getStatus().port
+            : null;
         this.hardwareState = "SCANNING";
         this.hardwareErrorCode = null;
         this.hardwareErrorDetail = null;
@@ -94,6 +117,7 @@ export class LocalRelayProvider implements RelayProvider {
             this.hardwareState = "ERROR";
             this.hardwareErrorCode = "SCAN_FAILED";
             this.hardwareErrorDetail = errorMessage(error);
+            hardwareLog.error("扫描 USB 设备失败", this.hardwareErrorDetail);
             this.emitHardwareStatus();
             throw error;
         }
@@ -103,13 +127,20 @@ export class LocalRelayProvider implements RelayProvider {
             profile: matchHardwareProfile(port),
         }));
         const hasMatch = matched.some((entry) => entry.profile);
-        if (ports.length === 0) {
+        const connectedStillPresent = wasConnected
+            && !!connectedPortId
+            && ports.some((port) => port.port === connectedPortId);
+        if (connectedStillPresent) {
+            this.hardwareState = "CONNECTED";
+        } else if (ports.length === 0) {
             this.hardwareState = "DISCONNECTED";
         } else if (hasMatch) {
             this.hardwareState = "DETECTED";
             // 检测到受支持的 USB 设备 → 上报 USB_ATTACHED
             const matchedEntry = matched.find((entry) => entry.profile);
             if (matchedEntry) {
+                // 扫描阶段就记录匹配到的配置，UI 可在连接前显示设备型号。
+                this.matchedProfile = matchedEntry.profile;
                 this.emitHardwareEvent("USB_ATTACHED", {
                     port: matchedEntry.port,
                     profile: matchedEntry.profile,
@@ -117,10 +148,13 @@ export class LocalRelayProvider implements RelayProvider {
             }
         } else {
             this.hardwareState = "UNSUPPORTED";
+            this.matchedProfile = null;
             this.hardwareErrorCode = "UNSUPPORTED_DEVICE";
-            this.hardwareErrorDetail = "检测到 USB 设备，但不支持（需要 CH340 + LCUS-1）";
-            // 检测到不支持的 USB 设备 → 上报 UNSUPPORTED_DEVICE
             const firstPort = ports[0];
+            this.hardwareErrorDetail = firstPort
+                ? `${describeUnsupportedPort(firstPort)}（需要 CH340 + LCUS-1）`
+                : "检测到 USB 设备，但未找到兼容串口驱动";
+            // 检测到不支持的 USB 设备 → 上报 UNSUPPORTED_DEVICE
             if (firstPort) {
                 this.emitHardwareEvent("UNSUPPORTED_DEVICE", {
                     port: firstPort,
@@ -128,6 +162,11 @@ export class LocalRelayProvider implements RelayProvider {
                 });
             }
         }
+        hardwareLog.info(
+            "USB 扫描完成",
+            `设备数=${ports.length} 已匹配配置=${matched.filter((m) => m.profile).length} `
+            + `状态=${this.hardwareState}`,
+        );
         this.emitHardwareStatus();
         return matched;
     }
@@ -172,7 +211,10 @@ export class LocalRelayProvider implements RelayProvider {
           this.matchedProfile = null;
           this.hardwareState = "UNSUPPORTED";
           this.hardwareErrorCode = "UNSUPPORTED_DEVICE";
-          this.hardwareErrorDetail = "未检测到受支持的 USB 继电器（需要 CH340 + LCUS-1）";
+          this.hardwareErrorDetail = port
+              ? `${describeUnsupportedPort(port)}（需要 CH340 + LCUS-1）`
+              : "未检测到受支持的 USB 继电器（需要 CH340 + LCUS-1）";
+          hardwareLog.warn("连接被拒绝", this.hardwareErrorDetail);
           this.emitHardwareStatus();
           throw new Error(this.hardwareErrorDetail);
       }
@@ -200,10 +242,18 @@ export class LocalRelayProvider implements RelayProvider {
               port,
               profile,
           });
+          hardwareLog.info(
+              "USB 继电器已连接",
+              `${profile.name} · ${profile.baudRate} `
+              + `${profile.dataBits}${profile.parity === "none"
+                  ? "N"
+                  : profile.parity.toUpperCase()[0]}${profile.stopBits}`,
+          );
       } catch (error) {
           this.hardwareState = "ERROR";
           this.hardwareErrorCode = "SERIAL_OPEN_FAILED";
           this.hardwareErrorDetail = errorMessage(error);
+          hardwareLog.error("打开串口失败", this.hardwareErrorDetail);
           this.emitHardwareStatus();
           // 串口打开失败 → 上报 USB_OPEN_FAILED
           this.emitHardwareEvent("USB_OPEN_FAILED", {
@@ -294,6 +344,12 @@ export class LocalRelayProvider implements RelayProvider {
         eventType: HardwareEventType,
         context: HardwareEventContext,
     ): void {
+        // 同一设备的重复扫描/重复广播只上报一次，避免 hardware_event 刷屏。
+        const key = `${eventType}:${context.port?.port ?? "-"}`;
+        if (this.lastHardwareEventKey === key) {
+            return;
+        }
+        this.lastHardwareEventKey = key;
         for (const listener of this.hardwareEventListeners) {
             listener(eventType, context);
         }
@@ -321,6 +377,7 @@ export class LocalRelayProvider implements RelayProvider {
     ): () => void {
         this.hardwareListeners.add(listener);
         this.trySubscribeAdapter();
+        this.trySubscribeDeviceChange();
         listener(this.getHardwareStatus());
         return () => this.hardwareListeners.delete(listener);
     }
@@ -400,6 +457,47 @@ export class LocalRelayProvider implements RelayProvider {
         this.adapterSubscribed = true;
         subscribable.onStatusChange((status) => this.handleAdapterStatus(status));
   }
+
+    /**
+     * 订阅 USB 插拔事件。
+     *
+     * - 插入：自动重新扫描并刷新 UI（用户不需要退出 App）
+     * - 拔出：关闭串口（适配器内部完成）+ 刷新设备列表 + 硬件状态回到未连接
+     */
+    private trySubscribeDeviceChange(): void {
+        if (this.deviceChangeSubscribed) {
+            return;
+        }
+        const subscribable = this.adapter as SerialAdapter & {
+            onDeviceChange?: (
+                listener: (change: SerialDeviceChange) => void,
+            ) => () => void;
+        };
+        if (!subscribable.onDeviceChange) {
+            return;
+        }
+        this.deviceChangeSubscribed = true;
+        subscribable.onDeviceChange((change) => {
+            void this.handleDeviceChange(change);
+        });
+    }
+
+    private async handleDeviceChange(
+        change: SerialDeviceChange,
+    ): Promise<void> {
+        hardwareLog.info(
+            change.type === "attached"
+                ? "USB 插入：自动重新扫描"
+                : "USB 拔出：刷新设备列表",
+            change.port?.port ?? "unknown",
+        );
+        try {
+            await this.scanAndMatch();
+        } catch (error) {
+            // 扫描失败时错误已写入 hardwareStatus.errorDetail，此处不再抛出。
+            hardwareLog.warn("插拔后自动扫描失败", errorMessage(error));
+        }
+    }
 
     private handleAdapterStatus(serial: SerialStatus): void {
         this.recomputeHardwareState(serial);

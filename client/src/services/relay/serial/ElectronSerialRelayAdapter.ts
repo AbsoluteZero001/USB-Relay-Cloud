@@ -4,6 +4,7 @@ import type {
   SerialPortInfo,
   SerialStatus,
 } from "./types";
+import {formatHardwareError, hardwareLog} from "../diagnostics";
 
 /**
  * Electron bridge placeholder.
@@ -30,7 +31,7 @@ export class ElectronSerialRelayAdapter implements SerialAdapter {
   async listPorts(): Promise<SerialPortInfo[]> {
     const api = this.api();
     const ports = await api.listPorts();
-    return ports.map((port) => ({
+    const mapped = ports.map((port) => ({
       port: port.port,
       device: port.device,
       description: port.description,
@@ -40,23 +41,40 @@ export class ElectronSerialRelayAdapter implements SerialAdapter {
       productId: port.productId,
       serialNumber: port.serialNumber,
       isCurrent: port.is_current,
+      driverName: null,
+      supported: !!port.vendorId && !!port.productId,
+      hasPermission: true,
     }));
+    hardwareLog.info(
+      `Electron 串口数量：${mapped.length}`,
+      mapped.map((port) => `${port.port} ${port.description}`).join("\n"),
+    );
+    return mapped;
   }
 
   async connect(
     portId: string,
     options: SerialOpenOptions,
   ): Promise<void> {
-    const result = await this.api().connect(portId, options);
-    this.status = {
-      state: result.state as SerialStatus["state"],
-      port: result.port,
-      device: result.port,
-      baudRate: options.baudRate,
-      connected: result.connected,
-      errorCode: result.error_code,
-      detail: result.detail,
-    };
+    try {
+      const result = await this.api().connect(portId, options);
+      this.status = {
+        state: result.state as SerialStatus["state"],
+        port: result.port,
+        device: result.port,
+        baudRate: options.baudRate,
+        connected: result.connected,
+        errorCode: result.error_code,
+        detail: result.detail,
+      };
+      hardwareLog.info(
+        "Electron 串口已打开",
+        `${portId} baudRate=${options.baudRate}`,
+      );
+    } catch (error) {
+      hardwareLog.error("Electron 串口打开失败", formatHardwareError(error));
+      throw error;
+    }
   }
 
   async disconnect(): Promise<void> {
@@ -73,7 +91,18 @@ export class ElectronSerialRelayAdapter implements SerialAdapter {
   }
 
   async send(data: Uint8Array): Promise<void> {
-    await this.api().send(Array.from(data));
+    try {
+      await this.api().send(Array.from(data));
+      hardwareLog.info(
+        "Electron 串口写入成功",
+        Array.from(data)
+          .map((byte) => byte.toString(16).padStart(2, "0").toUpperCase())
+          .join(" "),
+      );
+    } catch (error) {
+      hardwareLog.error("Electron 串口写入失败", formatHardwareError(error));
+      throw error;
+    }
   }
 
   getStatus(): SerialStatus {

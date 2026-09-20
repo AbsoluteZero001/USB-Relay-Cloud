@@ -9,7 +9,10 @@ export interface NativeUsbDevice {
   serialNumber: string | null;
   driverName: string | null;
   portCount: number;
+  /** UsbSerialProber 是否识别到可用串口驱动 */
   supported: boolean;
+  /** UsbManager.hasPermission(device) 的结果 */
+  hasPermission: boolean;
 }
 
 export interface NativeSerialStatus {

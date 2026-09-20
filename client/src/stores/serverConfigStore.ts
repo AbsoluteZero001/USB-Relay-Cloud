@@ -2,10 +2,14 @@ import {defineStore} from "pinia";
 
 import {
     clearConfiguredServerBaseUrl,
+    DEFAULT_SERVER_URL,
     getApiBaseUrl,
     getConfiguredServerBaseUrl,
     getDefaultServerBaseUrl,
+    getEffectiveServerBaseUrl,
+    getServerConfigSource,
     getWebSocketBaseUrl,
+    isNativeAndroid,
     saveConfiguredServerBaseUrl,
 } from "@/config/runtimeConfig";
 
@@ -27,24 +31,61 @@ export const useServerConfigStore = defineStore("serverConfig", {
     getters: {
         /** 当前生效的服务器根地址（含优先级计算）。 */
         effectiveServerBaseUrl(state): string {
-            return (
-                state.configuredServerBaseUrl || getDefaultServerBaseUrl()
-            );
+            return state.configuredServerBaseUrl
+                || getEffectiveServerBaseUrl();
         },
 
-        /** 派生的 REST API 基础地址。 */
-        apiBaseUrl(): string {
+        /**
+         * 派生的 REST API 基础地址。
+         *
+         * 显式读取 configuredServerBaseUrl，保证切换地址后 Pinia 的
+         * computed 缓存立即失效（无响应式依赖的 getter 会被永久缓存）。
+         */
+        apiBaseUrl(state): string {
+            void state.configuredServerBaseUrl;
             return getApiBaseUrl();
         },
 
         /** 派生的 WebSocket 地址。 */
-        wsBaseUrl(): string {
+        wsBaseUrl(state): string {
+            void state.configuredServerBaseUrl;
             return getWebSocketBaseUrl();
         },
 
         /** 是否为用户自定义地址（非构建时默认值）。 */
         isCustomized(state): boolean {
             return state.configuredServerBaseUrl.length > 0;
+        },
+
+        /** 构建期 / 平台默认地址（未保存自定义地址时使用）。 */
+        defaultServerBaseUrl(): string {
+            return getDefaultServerBaseUrl();
+        },
+
+        /** 平台内置默认值，用于「恢复默认」提示。 */
+        platformDefaultServerUrl(): string {
+            return DEFAULT_SERVER_URL;
+        },
+
+        isAndroidNative(): boolean {
+            return isNativeAndroid();
+        },
+
+        /** 当前地址来源，用于 UI 展示。 */
+        sourceLabel(state): string {
+            if (state.configuredServerBaseUrl) {
+                return "本地已保存";
+            }
+            switch (getServerConfigSource()) {
+                case "build-default":
+                    return "构建时默认值";
+                case "android-default":
+                    return "Android 默认值";
+                case "same-origin":
+                    return "当前页面同源地址";
+                case "custom":
+                    return "本地已保存";
+            }
         },
     },
 

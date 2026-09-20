@@ -21,6 +21,8 @@ const deviceStore = useDeviceStore();
 const eventStore = useEventStore();
 const serverConfig = useServerConfigStore();
 const runtime = relayService.getRuntime();
+const platformInfo = relayService.getPlatform();
+const hardwareStatus = relayService.getHardwareStatus();
 const saving = ref(false);
 const testing = ref(false);
 const message = ref<string | null>(null);
@@ -270,7 +272,9 @@ async function heartbeat(): Promise<void> {
         <dl class="settings-list">
           <div>
             <dt>运行平台</dt>
-            <dd>{{ runtime }}</dd>
+            <dd>
+              {{ runtime }} · Capacitor native={{ platformInfo.capacitorNative }}
+            </dd>
           </div>
           <div>
             <dt>本地控制</dt>
@@ -284,7 +288,10 @@ async function heartbeat(): Promise<void> {
           </div>
           <div>
             <dt>硬件状态</dt>
-            <dd>未知</dd>
+            <dd>
+              {{ relayService.isHardwareConnected() ? "已连接" : "未连接" }}
+              · 设备数 {{ hardwareStatus.lastPorts.length }}
+            </dd>
           </div>
         </dl>
       </div>

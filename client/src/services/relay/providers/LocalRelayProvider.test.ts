@@ -1,11 +1,17 @@
 import {createPinia, setActivePinia} from "pinia";
-import {beforeEach, describe, expect, it} from "vitest";
+import {beforeEach, describe, expect, it, vi} from "vitest";
 
 import {LocalRelayProvider} from "./LocalRelayProvider";
 import {LCUS1_CH340_PROFILE} from "../hardware/HardwareProfile";
 import {useRelayStore} from "@/stores/relayStore";
 import type {RequestableSerialAdapter} from "../serial/SerialAdapter";
-import type {SerialOpenOptions, SerialPortInfo, SerialStatus,} from "../serial/types";
+import type {
+    SerialDeviceChange,
+    SerialOpenOptions,
+    SerialPortInfo,
+    SerialStatus,
+} from "../serial/types";
+import type {HardwareEventType} from "@/types/api";
 import type {RelayAction, RelayEvent, RelayStateValue,} from "@/types/api";
 
 function ch340Port(overrides: Partial<SerialPortInfo> = {}): SerialPortInfo {
@@ -19,6 +25,9 @@ function ch340Port(overrides: Partial<SerialPortInfo> = {}): SerialPortInfo {
         productId: "7523",
         serialNumber: null,
         isCurrent: false,
+        driverName: "CH340",
+        supported: true,
+        hasPermission: false,
         ...overrides,
     };
 }
@@ -30,6 +39,8 @@ function unsupportedPort(): SerialPortInfo {
         description: "未知 USB 设备",
         device: "1 · 未知 USB 设备",
         hwid: "VID_9999&PID_0001",
+        driverName: null,
+        supported: false,
     });
 }
 
@@ -59,6 +70,8 @@ class FakeSerialAdapter implements RequestableSerialAdapter {
     private ports: SerialPortInfo[];
     private status: SerialStatus;
     private readonly listeners = new Set<(status: SerialStatus) => void>();
+    private readonly deviceChangeListeners =
+        new Set<(change: SerialDeviceChange) => void>();
 
     constructor(ports: SerialPortInfo[] = [ch340Port()]) {
         this.ports = ports;
@@ -134,8 +147,23 @@ class FakeSerialAdapter implements RequestableSerialAdapter {
         return () => this.listeners.delete(listener);
     }
 
+    onDeviceChange(
+        listener: (change: SerialDeviceChange) => void,
+    ): () => void {
+        this.deviceChangeListeners.add(listener);
+        return () => this.deviceChangeListeners.delete(listener);
+    }
+
+    /** 模拟 USB 插入：设备列表新增一台设备并广播 attached。 */
+    simulateAttach(port: SerialPortInfo = ch340Port()): void {
+        this.ports = [...this.ports, port];
+        this.emitDeviceChange({type: "attached", port});
+    }
+
     /** 模拟 USB 设备拔出（推送 error + SERIAL_DEVICE_DISCONNECTED）。 */
     simulateDetach(): void {
+        const port = this.ports[0] ?? null;
+        this.ports = [];
         this.status = {
             state: "error",
             port: null,
@@ -146,6 +174,13 @@ class FakeSerialAdapter implements RequestableSerialAdapter {
             detail: "USB 串口设备已拔出",
         };
         this.emit();
+        this.emitDeviceChange({type: "detached", port});
+    }
+
+    private emitDeviceChange(change: SerialDeviceChange): void {
+        for (const listener of this.deviceChangeListeners) {
+            listener(change);
+        }
     }
 
     private emit(): void {
@@ -222,7 +257,9 @@ describe("LocalRelayProvider hardware gate", () => {
         expect(matched[0]?.profile).toBeNull();
         expect(provider.getHardwareStatus().state).toBe("UNSUPPORTED");
 
-        await expect(provider.connect("1")).rejects.toThrow(/不受支持|未检测/);
+        await expect(provider.connect("1")).rejects.toThrow(
+            /未找到兼容串口驱动|不受支持|未检测/,
+        );
         expect(provider.isHardwareConnected()).toBe(false);
     });
 
@@ -310,6 +347,10 @@ describe("LocalRelayProvider hardware gate", () => {
 
         adapter.simulateDetach();
 
+        // 拔出后 Provider 会自动重新扫描（异步），等待其完成。
+        await vi.waitFor(() => {
+            expect(provider.getHardwareStatus().lastPorts).toEqual([]);
+        });
         expect(provider.getHardwareStatus().state).toBe("DISCONNECTED");
         expect(provider.getHardwareStatus().commandedState).toBe("UNKNOWN");
         expect(provider.isHardwareConnected()).toBe(false);
@@ -317,6 +358,54 @@ describe("LocalRelayProvider hardware gate", () => {
         await expect(provider.execute(command("OFF"))).rejects.toThrow(
             /未连接/,
         );
+    });
+
+    // USB 插入 → 自动重新扫描，UI 不需要用户退出 App。
+    it("auto rescans when a USB device is attached", async () => {
+        const adapter = new FakeSerialAdapter([]);
+        const provider = new LocalRelayProvider(adapter);
+        const hardwareEvents: HardwareEventType[] = [];
+        provider.onHardwareStatusChange(() => {
+        });
+        provider.onHardwareEvent((eventType) => {
+            hardwareEvents.push(eventType);
+        });
+
+        const empty = await provider.scanAndMatch();
+        expect(empty).toEqual([]);
+        expect(provider.getHardwareStatus().state).toBe("DISCONNECTED");
+
+        adapter.simulateAttach();
+
+        await vi.waitFor(() => {
+            expect(provider.getHardwareStatus().lastPorts).toHaveLength(1);
+        });
+        expect(provider.getHardwareStatus().state).toBe("DETECTED");
+        expect(provider.getHardwareStatus().matchedProfile).toBe(
+            LCUS1_CH340_PROFILE,
+        );
+        expect(hardwareEvents).toContain("USB_ATTACHED");
+    });
+
+    // 重新扫描已连接的串口不能把 CONNECTED 降级为 DETECTED。
+    it("keeps the connection alive when rescanning the connected port", async () => {
+        const adapter = new FakeSerialAdapter();
+        const provider = new LocalRelayProvider(adapter);
+        provider.onHardwareStatusChange(() => {
+        });
+
+        await provider.scanAndMatch();
+        await provider.connect("1");
+        expect(provider.isHardwareConnected()).toBe(true);
+
+        await provider.scanAndMatch();
+
+        expect(provider.getHardwareStatus().state).toBe("CONNECTED");
+        expect(provider.getHardwareStatus().matchedProfile).toBe(
+            LCUS1_CH340_PROFILE,
+        );
+        await provider.execute(command("ON"));
+        expect(adapter.sent).toEqual([[0xa0, 0x01, 0x01, 0xa2]]);
     });
 
     // spec §13.6 / §十二：WebSocket 远端 ON 不改变本地硬件连接状态。

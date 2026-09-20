@@ -3,6 +3,12 @@ import {createRelayEvent} from "@/api/eventApi";
 import {createSerialAdapter, getRelayRuntime, type RelayRuntime,} from "./serial";
 import {CloudRelayProvider} from "./providers/CloudRelayProvider";
 import {LocalRelayProvider,} from "./providers/LocalRelayProvider";
+import {
+    getPlatformDebugInfo,
+    hardwareLog,
+    type HardwareLogEntry,
+    type PlatformDebugInfo,
+} from "./diagnostics";
 import type {HardwareStatus} from "./hardware/HardwareStatus";
 import type {RelayHardwareProfile} from "./hardware/HardwareProfile";
 import {EventOutbox, type OutboxFlushSummary} from "./EventOutbox";
@@ -72,6 +78,34 @@ export class RelayService {
   isLocalControlSupported(): boolean {
     return this.localProvider.isAvailable();
   }
+
+    /**
+     * 适配器是否支持「选择新设备」。
+     * Web Serial 必须由用户手势触发 requestPort()，Android 则是申请 USB 权限。
+     */
+    supportsPortRequest(): boolean {
+        return this.localProvider.supportsPortRequest();
+    }
+
+    /** 当前运行平台（android / electron / web）与 Capacitor 判定结果。 */
+    getPlatform(): PlatformDebugInfo {
+        return getPlatformDebugInfo();
+    }
+
+    /** 硬件层调试日志（扫描 / 授权 / 打开 / 写入 / 异常）。 */
+    getDiagnostics(): readonly HardwareLogEntry[] {
+        return hardwareLog.list();
+    }
+
+    onDiagnostics(
+        listener: (entries: readonly HardwareLogEntry[]) => void,
+    ): () => void {
+        return hardwareLog.subscribe(listener);
+    }
+
+    clearDiagnostics(): void {
+        hardwareLog.clear();
+    }
 
   isLocalControlConnected(): boolean {
       return this.localProvider.isHardwareConnected();
