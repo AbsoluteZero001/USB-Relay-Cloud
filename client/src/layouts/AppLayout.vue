@@ -26,6 +26,10 @@ const currentLabel = computed(() => {
   const item = navItems.find((candidate) => candidate.name === route.name);
   return item?.label ?? "USB Relay Cloud";
 });
+
+// 登录路由引导期间保留 RouterView，使登录页的真实阶段进度条持续可见；
+// 其他路由的启动加载行为保持不变。
+const isLoginRoute = computed(() => route.name === "login");
 </script>
 
 <template>
@@ -77,9 +81,12 @@ const currentLabel = computed(() => {
         {{ bootstrapError }}
       </div>
 
-      <main class="page-stage" :class="{ 'is-booting': booting }">
-        <div v-if="booting" class="loading-line" />
-        <RouterView v-else />
+      <main
+          class="page-stage"
+          :class="{ 'is-booting': booting && !isLoginRoute }"
+      >
+        <div v-if="booting && !isLoginRoute" class="loading-line"/>
+        <RouterView v-if="!booting || isLoginRoute"/>
       </main>
     </div>
 
