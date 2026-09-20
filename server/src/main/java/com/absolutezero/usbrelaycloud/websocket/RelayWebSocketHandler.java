@@ -2,6 +2,7 @@ package com.absolutezero.usbrelaycloud.websocket;
 
 import com.absolutezero.usbrelaycloud.common.enums.GlobalRole;
 import com.absolutezero.usbrelaycloud.entity.DeviceEntity;
+import com.absolutezero.usbrelaycloud.entity.HardwareEventEntity;
 import com.absolutezero.usbrelaycloud.entity.RelayEventEntity;
 import com.absolutezero.usbrelaycloud.mapper.DeviceUserMapper;
 import com.absolutezero.usbrelaycloud.mapper.RelayEventMapper;
@@ -223,6 +224,17 @@ public class RelayWebSocketHandler extends TextWebSocketHandler
                 RelayWebSocketMessage.deviceStatusChanged(device);
         sessions.values().forEach(session -> {
             if (canReceive(session.getId(), device.getDeviceId())) {
+                sendQuietly(session, message);
+            }
+        });
+    }
+
+    @Override
+    public void broadcastHardwareEvent(HardwareEventEntity event) {
+        RelayWebSocketMessage message =
+                RelayWebSocketMessage.hardwareEvent(event);
+        sessions.values().forEach(session -> {
+            if (canReceive(session.getId(), event.getDeviceId())) {
                 sendQuietly(session, message);
             }
         });

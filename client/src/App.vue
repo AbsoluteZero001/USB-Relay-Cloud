@@ -2,17 +2,19 @@
 import {onBeforeUnmount, ref, watch} from "vue";
 
 import AppLayout from "@/layouts/AppLayout.vue";
-import { relayWebSocket } from "@/services/websocket";
-import { websocketMessageToRelayEvent } from "@/services/websocket/message";
+import {relayWebSocket} from "@/services/websocket";
+import {websocketMessageToHardwareEvent, websocketMessageToRelayEvent,} from "@/services/websocket/message";
 import {useAuthStore} from "@/stores/authStore";
-import { useConnectionStore } from "@/stores/connectionStore";
-import { useDeviceStore } from "@/stores/deviceStore";
-import { useEventStore } from "@/stores/eventStore";
-import { useRelayStore } from "@/stores/relayStore";
+import {useConnectionStore} from "@/stores/connectionStore";
+import {useDeviceStore} from "@/stores/deviceStore";
+import {useEventStore} from "@/stores/eventStore";
+import {useHardwareEventStore} from "@/stores/hardwareEventStore";
+import {useRelayStore} from "@/stores/relayStore";
 
 const authStore = useAuthStore();
 const deviceStore = useDeviceStore();
 const eventStore = useEventStore();
+const hardwareEventStore = useHardwareEventStore();
 const relayStore = useRelayStore();
 const connectionStore = useConnectionStore();
 
@@ -80,6 +82,13 @@ async function bootstrap(): Promise<void> {
           if (eventStore.appendEvent(event)) {
             relayStore.applyEvent(event);
           }
+        }
+        return;
+      }
+      if (message.type === "HARDWARE_EVENT") {
+        const event = websocketMessageToHardwareEvent(message);
+        if (event) {
+          hardwareEventStore.appendEvent(event);
         }
         return;
       }

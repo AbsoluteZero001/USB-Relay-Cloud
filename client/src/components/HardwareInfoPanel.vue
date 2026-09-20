@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import {CircleHelp, Cpu, Usb} from "@lucide/vue";
+import {Cpu, Usb} from "@lucide/vue";
 import {computed} from "vue";
 
 import {relayService} from "@/services/relay";
@@ -14,15 +14,21 @@ const status = computed(() => props.hardwareStatus);
 const localSupported = computed(() => relayService.isLocalControlSupported());
 const hardwareConnected = computed(() => status.value.state === "CONNECTED");
 const matchedProfile = computed(() => status.value.matchedProfile);
+const currentPort = computed(
+    () => status.value.lastPorts.find((p) => p.isCurrent) ?? null,
+);
 
 const hardwareStatusLabel = computed(() => {
   if (!localSupported.value) return "不可用";
   return hardwareStateLabel(status.value.state);
 });
 
-const readbackLabel = computed(() => {
+const serialParams = computed(() => {
   if (!matchedProfile.value) return "—";
-  return matchedProfile.value.supportsStateReadback ? "支持" : "不支持";
+  const p = matchedProfile.value;
+  return `${p.baudRate} · ${p.dataBits}${
+      p.parity === "none" ? "N" : p.parity.toUpperCase()[0]
+  }${p.stopBits}`;
 });
 </script>
 
@@ -51,33 +57,31 @@ const readbackLabel = computed(() => {
       <div class="info-item">
         <dt>
           <Cpu :size="14"/>
-          HardwareProfile
+          设备型号
         </dt>
         <dd class="info-value">
-          {{ matchedProfile?.name ?? "未匹配" }}
+          {{ matchedProfile?.name ?? "—" }}
         </dd>
       </div>
       <div class="info-item">
-        <dt>
-          <CircleHelp :size="14"/>
-          状态回读
-        </dt>
-        <dd class="info-value" :class="matchedProfile?.supportsStateReadback ? 'success' : 'unknown'">
-          {{ readbackLabel }}
+        <dt>串口设备</dt>
+        <dd class="info-value">{{ currentPort?.device ?? "—" }}</dd>
+      </div>
+      <div class="info-item">
+        <dt>VID / PID</dt>
+        <dd class="info-value">
+          {{ currentPort?.vendorId ?? "—" }} /
+          {{ currentPort?.productId ?? "—" }}
         </dd>
       </div>
       <div class="info-item">
-        <dt>
-          <CircleHelp :size="14"/>
-          实际硬件状态
-        </dt>
-        <dd class="info-value unknown">未知</dd>
+        <dt>串口参数</dt>
+        <dd class="info-value">{{ serialParams }}</dd>
+      </div>
+      <div class="info-item">
+        <dt>通道</dt>
+        <dd class="info-value">{{ matchedProfile?.channels ?? "—" }}</dd>
       </div>
     </dl>
-
-    <p class="inline-note hardware-explain">
-      LCUS-1 当前没有已验证的状态回读协议，因此系统只能确认最后一次成功写入的指令，
-      无法确认继电器触点当前物理状态。
-    </p>
   </section>
 </template>

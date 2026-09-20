@@ -4,18 +4,19 @@ import com.absolutezero.usbrelaycloud.common.enums.CommandStatus;
 import com.absolutezero.usbrelaycloud.common.enums.RelayStateValue;
 import com.absolutezero.usbrelaycloud.exception.GlobalExceptionHandler;
 import com.absolutezero.usbrelaycloud.service.DeviceService;
+import com.absolutezero.usbrelaycloud.service.HardwareEventService;
 import com.absolutezero.usbrelaycloud.service.RelayEventService;
 import com.absolutezero.usbrelaycloud.vo.RelayStateResponse;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.ExtendWith;
+import org.mockito.Mock;
+import org.mockito.junit.jupiter.MockitoExtension;
 import org.springframework.http.MediaType;
 import org.springframework.http.converter.json.MappingJackson2HttpMessageConverter;
 import org.springframework.test.web.servlet.MockMvc;
 import org.springframework.test.web.servlet.setup.MockMvcBuilders;
-import org.mockito.Mock;
-import org.mockito.junit.jupiter.MockitoExtension;
 
 import java.time.Instant;
 
@@ -37,6 +38,9 @@ class DeviceControllerTest {
     @Mock
     private RelayEventService relayEventService;
 
+    @Mock
+    private HardwareEventService hardwareEventService;
+
     @BeforeEach
     void setUp() {
         ObjectMapper objectMapper =
@@ -45,7 +49,8 @@ class DeviceControllerTest {
                 .standaloneSetup(
                         new DeviceController(
                                 deviceService,
-                                relayEventService
+                                relayEventService,
+                                hardwareEventService
                         )
                 )
                 .setControllerAdvice(new GlobalExceptionHandler())

@@ -1401,10 +1401,160 @@ button:disabled {
     line-height: 1.6;
 }
 
+/* ===== V2 日志列表布局 ===== */
+
+.event-list-v2 {
+    display: grid;
+    border-top: 1px solid var(--line);
+}
+
+.log-date-header {
+    padding: 10px 4px 6px;
+    color: var(--muted);
+    font-size: 12px;
+    font-weight: 700;
+    letter-spacing: 0.02em;
+    border-bottom: 1px solid #eef2f4;
+}
+
+.log-row {
+    display: grid;
+    grid-template-columns: 72px minmax(0, 1fr) auto;
+    align-items: start;
+    gap: 14px;
+    padding: 12px 4px;
+    border-bottom: 1px solid #eef2f4;
+}
+
+.log-row:last-child {
+    border-bottom: 0;
+}
+
+.log-time {
+    font-size: 15px;
+    font-weight: 700;
+    color: var(--ink);
+    font-variant-numeric: tabular-nums;
+    padding-top: 2px;
+}
+
+.log-main {
+    display: grid;
+    gap: 4px;
+    min-width: 0;
+}
+
+.log-title {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    font-size: 14px;
+}
+
+.log-title strong {
+    font-weight: 700;
+}
+
+.log-icon {
+    display: inline-grid;
+    width: 26px;
+    height: 26px;
+    place-items: center;
+    border-radius: 6px;
+    background: #edf1f3;
+    color: var(--muted);
+    flex-shrink: 0;
+}
+
+.log-icon.on {
+    color: var(--success);
+    background: var(--success-soft);
+}
+
+.log-icon.off {
+    color: var(--danger);
+    background: var(--danger-soft);
+}
+
+.log-icon.hardware {
+    color: var(--accent);
+    background: #e4f2f2;
+}
+
+.log-sub {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 6px 14px;
+    color: var(--muted);
+    font-size: 12px;
+}
+
+.log-device {
+    font-weight: 600;
+    color: #43525b;
+    display: inline-flex;
+    align-items: center;
+    gap: 4px;
+}
+
+.log-meta {
+    color: var(--muted);
+}
+
+.log-error {
+    color: var(--danger);
+    font-size: 12px;
+    margin-top: 2px;
+}
+
+.log-status {
+    padding-top: 2px;
+}
+
+.status-tag {
+    display: inline-flex;
+    align-items: center;
+    min-height: 26px;
+    padding: 0 10px;
+    font-size: 12px;
+    font-weight: 700;
+    border-radius: 999px;
+    white-space: nowrap;
+}
+
+.status-tag.success {
+    color: var(--success);
+    background: var(--success-soft);
+}
+
+.status-tag.failed {
+    color: var(--danger);
+    background: var(--danger-soft);
+}
+
+.status-tag.neutral {
+    color: var(--muted);
+    background: var(--surface-soft);
+}
+
 /* 移动端适配 */
 @media (max-width: 720px) {
     .panel-card {
         padding: 17px;
+    }
+
+    .log-row {
+        grid-template-columns: 60px minmax(0, 1fr);
+        gap: 10px;
+    }
+
+    .log-status {
+        grid-column: 1 / -1;
+        padding-top: 0;
+    }
+
+    .log-time {
+        font-size: 14px;
     }
 
     .overview-grid {

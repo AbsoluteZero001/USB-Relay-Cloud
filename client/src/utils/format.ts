@@ -1,6 +1,7 @@
 import type {
     CommandStatus,
     EventSource,
+    HardwareEventType,
     OnlineStatus,
     RelayAction,
     RelayStateValue,
@@ -87,6 +88,66 @@ export function onlineLabel(status: OnlineStatus): string {
 
 export function commandStatusLabel(status: CommandStatus): string {
     return status === "SUCCESS" ? "成功" : "失败";
+}
+
+/**
+ * 硬件生命周期事件的中文标签。
+ * 不依赖颜色作为唯一信息表达。
+ */
+export function hardwareEventTypeLabel(type: HardwareEventType): string {
+    const labels: Record<HardwareEventType, string> = {
+        USB_ATTACHED: "USB 设备插入",
+        USB_CONNECTED: "继电器连接成功",
+        USB_DISCONNECTED: "USB 连接断开",
+        USB_DETACHED: "USB 设备拔出",
+        USB_PERMISSION_GRANTED: "USB 权限已授予",
+        USB_PERMISSION_DENIED: "USB 权限被拒绝",
+        USB_OPEN_FAILED: "串口打开失败",
+        USB_WRITE_FAILED: "串口写入失败",
+        UNSUPPORTED_DEVICE: "不支持的 USB 设备",
+    };
+    return labels[type];
+}
+
+/**
+ * 硬件事件的结果/状态标签，用于日志列表右侧状态列。
+ */
+export function hardwareEventResultLabel(type: HardwareEventType): string {
+    switch (type) {
+        case "USB_ATTACHED":
+        case "USB_CONNECTED":
+        case "USB_PERMISSION_GRANTED":
+            return "成功";
+        case "USB_DETACHED":
+        case "USB_DISCONNECTED":
+            return "已断开";
+        case "USB_OPEN_FAILED":
+        case "USB_WRITE_FAILED":
+        case "USB_PERMISSION_DENIED":
+        case "UNSUPPORTED_DEVICE":
+            return "失败";
+        default:
+            return "—";
+    }
+}
+
+export function hardwareEventClass(type: HardwareEventType): string {
+    switch (type) {
+        case "USB_ATTACHED":
+        case "USB_CONNECTED":
+        case "USB_PERMISSION_GRANTED":
+            return "success";
+        case "USB_DETACHED":
+        case "USB_DISCONNECTED":
+            return "neutral";
+        case "USB_OPEN_FAILED":
+        case "USB_WRITE_FAILED":
+        case "USB_PERMISSION_DENIED":
+        case "UNSUPPORTED_DEVICE":
+            return "failed";
+        default:
+            return "neutral";
+    }
 }
 
 export function webSocketStatusLabel(status: WebSocketStatus): string {

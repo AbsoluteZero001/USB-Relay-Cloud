@@ -1,3 +1,4 @@
+import {createHardwareEvent} from "@/api/hardwareEventApi";
 import {createRelayEvent} from "@/api/eventApi";
 import {createSerialAdapter, getRelayRuntime, type RelayRuntime,} from "./serial";
 import {CloudRelayProvider} from "./providers/CloudRelayProvider";
@@ -8,6 +9,8 @@ import {EventOutbox, type OutboxFlushSummary} from "./EventOutbox";
 import type {
     CloudSyncStatus,
     CommandStatus,
+    HardwareEventCreatePayload,
+    HardwareEventType,
     RelayAction,
     RelayEvent,
     RelayEventCreatePayload,
@@ -41,6 +44,14 @@ export class RelayService {
   );
   private readonly cloudProvider = new CloudRelayProvider();
     private readonly eventOutbox = new EventOutbox();
+
+    constructor() {
+        // 订阅本地硬件生命周期事件，上报到服务端 hardware_event 表。
+        // 仅当已设置 deviceId（用户选择了设备）时才真正 POST。
+        this.localProvider.onHardwareEvent((eventType, context) => {
+            void this.reportHardwareEvent(eventType, context);
+        });
+    }
 
   getRuntime(): RelayRuntime {
     return getRelayRuntime();
@@ -119,6 +130,57 @@ export class RelayService {
   disconnectLocal(): Promise<void> {
     return this.localProvider.disconnect();
   }
+
+    /**
+     * 设置当前关联的云端设备 ID。
+     * 硬件生命周期事件（USB_ATTACHED / CONNECTED 等）只有在设置了 deviceId 后才会上报服务端。
+     */
+    setLocalDeviceId(deviceId: string | null): void {
+        this.localProvider.setDeviceId(deviceId);
+    }
+
+    /**
+     * 上报硬件生命周期事件到服务端 hardware_event 表。
+     * 与 relay_event 完全独立，绝不把 USB 拔出伪装成 relay OFF。
+     */
+    private async reportHardwareEvent(
+        eventType: HardwareEventType,
+        context: {
+            port?: import("./serial/types").SerialPortInfo | null;
+            profile?: RelayHardwareProfile | null;
+            errorCode?: string | null;
+            errorMessage?: string | null;
+        },
+    ): Promise<void> {
+        const deviceId = this.localProvider.getDeviceId();
+        if (!deviceId) {
+            return;
+        }
+        const port = context.port ?? null;
+        const profile = context.profile ?? null;
+        const payload: HardwareEventCreatePayload = {
+            eventId: createId(),
+            eventType,
+            source: this.localProvider.getSource(),
+            clientId: clientId(),
+            profileName: profile?.name ?? null,
+            serialDevice: port?.device ?? null,
+            vendorId: port?.vendorId ?? null,
+            productId: port?.productId ?? null,
+            baudRate: profile?.baudRate ?? null,
+            dataBits: profile?.dataBits ?? null,
+            stopBits: profile?.stopBits ?? null,
+            parity: profile?.parity ?? null,
+            channel: profile?.channels ?? null,
+            errorCode: context.errorCode ?? null,
+            errorMessage: context.errorMessage ?? null,
+        };
+        try {
+            await createHardwareEvent(deviceId, payload);
+        } catch {
+            // 硬件事件上报失败不影响控制流程；V1 不做重试队列。
+        }
+    }
 
     /**
      * 执行本地继电器指令并同步云端。

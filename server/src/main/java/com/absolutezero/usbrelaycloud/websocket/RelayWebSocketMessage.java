@@ -1,13 +1,11 @@
 package com.absolutezero.usbrelaycloud.websocket;
 
-import com.absolutezero.usbrelaycloud.common.enums.CommandStatus;
-import com.absolutezero.usbrelaycloud.common.enums.EventSource;
-import com.absolutezero.usbrelaycloud.common.enums.OnlineStatus;
-import com.absolutezero.usbrelaycloud.common.enums.RelayAction;
-import com.absolutezero.usbrelaycloud.common.enums.RelayStateValue;
+import com.absolutezero.usbrelaycloud.common.enums.*;
 import com.absolutezero.usbrelaycloud.entity.DeviceEntity;
+import com.absolutezero.usbrelaycloud.entity.HardwareEventEntity;
 import com.absolutezero.usbrelaycloud.entity.RelayEventEntity;
 
+import java.math.BigDecimal;
 import java.time.Instant;
 
 public record RelayWebSocketMessage(
@@ -27,7 +25,19 @@ public record RelayWebSocketMessage(
         String clientId,
         OnlineStatus onlineStatus,
         Instant timestamp,
-        String message
+        String message,
+        // 硬件生命周期事件专用字段（HARDWARE_EVENT 类型）
+        HardwareEventType hardwareEventType,
+        String hardwareProfileName,
+        String hardwareSerialDevice,
+        String hardwareVendorId,
+        String hardwareProductId,
+        Integer hardwareBaudRate,
+        Integer hardwareDataBits,
+        BigDecimal hardwareStopBits,
+        String hardwareParity,
+        String hardwareErrorCode,
+        String hardwareErrorMessage
 ) {
 
     public static RelayWebSocketMessage connected(
@@ -37,21 +47,11 @@ public record RelayWebSocketMessage(
         return new RelayWebSocketMessage(
                 "CONNECTED",
                 afterSequence,
-                null,
-                null,
-                null,
-                null,
-                null,
-                null,
-                null,
-                null,
-                null,
-                null,
-                null,
-                null,
-                null,
+                null, null, null, null, null, null, null,
+                null, null, null, null, null, null,
                 timestamp,
-                "websocket connected"
+                "websocket connected",
+                null, null, null, null, null, null, null, null, null, null, null
         );
     }
 
@@ -75,7 +75,8 @@ public record RelayWebSocketMessage(
                 event.getClientId(),
                 null,
                 event.getCreatedAt(),
-                null
+                null,
+                null, null, null, null, null, null, null, null, null, null, null
         );
     }
 
@@ -88,18 +89,11 @@ public record RelayWebSocketMessage(
                 null,
                 device.getDeviceId(),
                 device.getDeviceName(),
-                null,
-                null,
-                null,
-                null,
-                null,
-                null,
-                null,
-                null,
-                null,
+                null, null, null, null, null, null, null, null, null,
                 device.getOnlineStatus(),
                 device.getUpdatedAt(),
-                null
+                null,
+                null, null, null, null, null, null, null, null, null, null, null
         );
     }
 
@@ -110,96 +104,78 @@ public record RelayWebSocketMessage(
         return new RelayWebSocketMessage(
                 "SYNC_COMPLETE",
                 latestSequence,
-                null,
-                null,
-                null,
-                null,
-                null,
-                null,
-                null,
-                null,
-                null,
-                null,
-                null,
-                null,
-                null,
+                null, null, null, null, null, null, null,
+                null, null, null, null, null, null,
                 Instant.now(),
-                "replayed " + replayedEvents + " event(s)"
+                "replayed " + replayedEvents + " event(s)",
+                null, null, null, null, null, null, null, null, null, null, null
         );
     }
 
-    /**
-     * 客户端 AUTH 帧验证通过。message 携带用户名便于调试。
-     */
     public static RelayWebSocketMessage authenticated(String username) {
         return new RelayWebSocketMessage(
                 "AUTHENTICATED",
-                null,
-                null,
-                null,
-                null,
-                null,
-                null,
-                null,
-                null,
-                null,
-                null,
-                null,
-                null,
-                null,
-                null,
+                null, null, null, null, null, null, null,
+                null, null, null, null, null, null, null,
                 Instant.now(),
-                "authenticated as " + username
+                "authenticated as " + username,
+                null, null, null, null, null, null, null, null, null, null, null
         );
     }
 
-    /**
-     * 客户端 AUTH 帧验证失败。reason 为失败原因（中文 UI 文案）。
-     */
     public static RelayWebSocketMessage authFailed(String reason) {
         return new RelayWebSocketMessage(
                 "AUTH_FAILED",
-                null,
-                null,
-                null,
-                null,
-                null,
-                null,
-                null,
-                null,
-                null,
-                null,
-                null,
-                null,
-                null,
-                null,
+                null, null, null, null, null, null, null,
+                null, null, null, null, null, null, null,
                 Instant.now(),
-                reason
+                reason,
+                null, null, null, null, null, null, null, null, null, null, null
+        );
+    }
+
+    public static RelayWebSocketMessage error(String message) {
+        return new RelayWebSocketMessage(
+                "ERROR",
+                null, null, null, null, null, null, null,
+                null, null, null, null, null, null, null,
+                Instant.now(),
+                message,
+                null, null, null, null, null, null, null, null, null, null, null
         );
     }
 
     /**
-     * 通用 ERROR 消息（如认证超时、协议错误）。
+     * 硬件生命周期事件广播（USB 插入 / 连接 / 断开 / 拔出 / 失败等）。
+     * 独立于继电器 ON/OFF 事件，不伪造继电器状态。
      */
-    public static RelayWebSocketMessage error(String message) {
+    public static RelayWebSocketMessage hardwareEvent(
+            HardwareEventEntity event
+    ) {
         return new RelayWebSocketMessage(
-                "ERROR",
+                "HARDWARE_EVENT",
+                event.getId(),
+                event.getEventId(),
+                event.getDeviceId(),
                 null,
+                event.getChannel(),
+                null, null, null, null, null, null,
+                event.getSource(),
+                event.getClientId(),
                 null,
+                event.getCreatedAt(),
                 null,
-                null,
-                null,
-                null,
-                null,
-                null,
-                null,
-                null,
-                null,
-                null,
-                null,
-                null,
-                Instant.now(),
-                message
+                event.getEventType(),
+                event.getProfileName(),
+                event.getSerialDevice(),
+                event.getVendorId(),
+                event.getProductId(),
+                event.getBaudRate(),
+                event.getDataBits(),
+                event.getStopBits(),
+                event.getParity(),
+                event.getErrorCode(),
+                event.getErrorMessage()
         );
     }
 }

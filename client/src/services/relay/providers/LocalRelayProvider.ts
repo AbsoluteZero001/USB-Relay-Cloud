@@ -4,7 +4,21 @@ import type {SerialAdapter} from "../serial/SerialAdapter";
 import type {SerialPortInfo, SerialStatus} from "../serial/types";
 import type {RelayProvider, RelayProviderCommand, RelayProviderExecution,} from "./RelayProvider";
 
-import type {CommandStatus, EventSource, RelayAction, RelayStateValue,} from "@/types/api";
+import type {CommandStatus, EventSource, HardwareEventType, RelayAction, RelayStateValue,} from "@/types/api";
+
+/** 硬件生命周期事件上下文，用于上报到服务端 hardware_event。 */
+export interface HardwareEventContext {
+    port?: SerialPortInfo | null;
+    profile?: RelayHardwareProfile | null;
+    errorCode?: string | null;
+    errorMessage?: string | null;
+}
+
+/** 硬件事件监听器签名。 */
+export type HardwareEventListener = (
+    eventType: HardwareEventType,
+    context: HardwareEventContext,
+) => void;
 
 function errorMessage(error: unknown): string {
     if (error instanceof Error) return error.message;
@@ -38,9 +52,13 @@ export class LocalRelayProvider implements RelayProvider {
     private hardwareErrorCode: string | null = null;
     private hardwareErrorDetail: string | null = null;
 
+    /** 当前关联的云端设备 ID；设置后才能上报 hardware_event。 */
+    private deviceId: string | null = null;
+
     private adapterSubscribed = false;
     private readonly statusListeners = new Set<(status: SerialStatus) => void>();
     private readonly hardwareListeners = new Set<(status: HardwareStatus) => void>();
+    private readonly hardwareEventListeners = new Set<HardwareEventListener>();
 
     constructor(private readonly adapter: SerialAdapter) {
     }
@@ -89,10 +107,26 @@ export class LocalRelayProvider implements RelayProvider {
             this.hardwareState = "DISCONNECTED";
         } else if (hasMatch) {
             this.hardwareState = "DETECTED";
+            // 检测到受支持的 USB 设备 → 上报 USB_ATTACHED
+            const matchedEntry = matched.find((entry) => entry.profile);
+            if (matchedEntry) {
+                this.emitHardwareEvent("USB_ATTACHED", {
+                    port: matchedEntry.port,
+                    profile: matchedEntry.profile,
+                });
+            }
         } else {
             this.hardwareState = "UNSUPPORTED";
             this.hardwareErrorCode = "UNSUPPORTED_DEVICE";
             this.hardwareErrorDetail = "检测到 USB 设备，但不支持（需要 CH340 + LCUS-1）";
+            // 检测到不支持的 USB 设备 → 上报 UNSUPPORTED_DEVICE
+            const firstPort = ports[0];
+            if (firstPort) {
+                this.emitHardwareEvent("UNSUPPORTED_DEVICE", {
+                    port: firstPort,
+                    profile: null,
+                });
+            }
         }
         this.emitHardwareStatus();
         return matched;
@@ -161,16 +195,30 @@ export class LocalRelayProvider implements RelayProvider {
           this.hardwareErrorCode = null;
           this.hardwareErrorDetail = null;
           this.emitHardwareStatus();
+          // 串口成功打开 → 上报 USB_CONNECTED
+          this.emitHardwareEvent("USB_CONNECTED", {
+              port,
+              profile,
+          });
       } catch (error) {
           this.hardwareState = "ERROR";
           this.hardwareErrorCode = "SERIAL_OPEN_FAILED";
           this.hardwareErrorDetail = errorMessage(error);
           this.emitHardwareStatus();
+          // 串口打开失败 → 上报 USB_OPEN_FAILED
+          this.emitHardwareEvent("USB_OPEN_FAILED", {
+              port,
+              profile,
+              errorCode: "SERIAL_OPEN_FAILED",
+              errorMessage: errorMessage(error),
+          });
           throw error;
       }
   }
 
   async disconnect(): Promise<void> {
+      const profile = this.matchedProfile;
+      const port = this.lastPorts.find((p) => p.isCurrent) ?? null;
       try {
           await this.adapter.disconnect();
       } finally {
@@ -181,6 +229,11 @@ export class LocalRelayProvider implements RelayProvider {
           this.hardwareErrorCode = null;
           this.hardwareErrorDetail = null;
           this.emitHardwareStatus();
+          // 主动断开连接 → 上报 USB_DISCONNECTED（不是 USB_DETACHED）
+          this.emitHardwareEvent("USB_DISCONNECTED", {
+              port,
+              profile,
+          });
       }
   }
 
@@ -217,6 +270,33 @@ export class LocalRelayProvider implements RelayProvider {
 
     isHardwareConnected(): boolean {
         return this.hardwareState === "CONNECTED";
+    }
+
+    /** 设置当前关联的云端设备 ID；设置后硬件事件才会上报。 */
+    setDeviceId(deviceId: string | null): void {
+        this.deviceId = deviceId;
+    }
+
+    getDeviceId(): string | null {
+        return this.deviceId;
+    }
+
+    /**
+     * 订阅硬件生命周期事件（USB_ATTACHED / CONNECTED / DISCONNECTED / DETACHED 等）。
+     * 监听器由 RelayService 注册，用于把事件上报到服务端 hardware_event 表。
+     */
+    onHardwareEvent(listener: HardwareEventListener): () => void {
+        this.hardwareEventListeners.add(listener);
+        return () => this.hardwareEventListeners.delete(listener);
+    }
+
+    private emitHardwareEvent(
+        eventType: HardwareEventType,
+        context: HardwareEventContext,
+    ): void {
+        for (const listener of this.hardwareEventListeners) {
+            listener(eventType, context);
+        }
     }
 
     isCommandExecuting(): boolean {
@@ -365,7 +445,18 @@ export class LocalRelayProvider implements RelayProvider {
             // 不修改云端 commandedState，不生成假的 OFF 事件。
             this.commandedState = "UNKNOWN";
             this.commandStatus = null;
+            // 保存 profile 引用用于上报，然后清空。
+            const detachedProfile = this.matchedProfile;
             this.matchedProfile = null;
+            // USB 物理拔出（detached）→ 上报 USB_DETACHED；
+            // 其他断开（如主动 disconnect 已在 disconnect() 中上报 USB_DISCONNECTED）。
+            if (detached) {
+                const port = this.lastPorts.find((p) => p.isCurrent) ?? null;
+                this.emitHardwareEvent("USB_DETACHED", {
+                    port,
+                    profile: detachedProfile,
+                });
+            }
         }
         this.hardwareState = next;
         this.emitHardwareStatus();

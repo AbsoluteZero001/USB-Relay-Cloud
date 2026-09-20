@@ -4,24 +4,16 @@ import com.absolutezero.usbrelaycloud.common.ApiResponse;
 import com.absolutezero.usbrelaycloud.common.PageResponse;
 import com.absolutezero.usbrelaycloud.common.enums.EventSource;
 import com.absolutezero.usbrelaycloud.common.enums.RelayAction;
+import com.absolutezero.usbrelaycloud.dto.HardwareEventCreateRequest;
 import com.absolutezero.usbrelaycloud.dto.HeartbeatRequest;
 import com.absolutezero.usbrelaycloud.dto.RelayEventCreateRequest;
 import com.absolutezero.usbrelaycloud.service.DeviceService;
+import com.absolutezero.usbrelaycloud.service.HardwareEventService;
 import com.absolutezero.usbrelaycloud.service.RelayEventService;
-import com.absolutezero.usbrelaycloud.vo.DeviceDetailResponse;
-import com.absolutezero.usbrelaycloud.vo.DeviceResponse;
-import com.absolutezero.usbrelaycloud.vo.HeartbeatResponse;
-import com.absolutezero.usbrelaycloud.vo.RelayEventResponse;
-import com.absolutezero.usbrelaycloud.vo.RelayStateResponse;
+import com.absolutezero.usbrelaycloud.vo.*;
 import jakarta.validation.Valid;
 import org.springframework.format.annotation.DateTimeFormat;
-import org.springframework.web.bind.annotation.GetMapping;
-import org.springframework.web.bind.annotation.PathVariable;
-import org.springframework.web.bind.annotation.PostMapping;
-import org.springframework.web.bind.annotation.RequestBody;
-import org.springframework.web.bind.annotation.RequestMapping;
-import org.springframework.web.bind.annotation.RequestParam;
-import org.springframework.web.bind.annotation.RestController;
+import org.springframework.web.bind.annotation.*;
 
 import java.time.Instant;
 
@@ -31,13 +23,16 @@ public class DeviceController {
 
     private final DeviceService deviceService;
     private final RelayEventService relayEventService;
+    private final HardwareEventService hardwareEventService;
 
     public DeviceController(
             DeviceService deviceService,
-            RelayEventService relayEventService
+            RelayEventService relayEventService,
+            HardwareEventService hardwareEventService
     ) {
         this.deviceService = deviceService;
         this.relayEventService = relayEventService;
+        this.hardwareEventService = hardwareEventService;
     }
 
     @GetMapping
@@ -102,6 +97,37 @@ public class DeviceController {
         deviceService.requireControlAccess(deviceId);
         return ApiResponse.success(
                 relayEventService.record(deviceId, request)
+        );
+    }
+
+    @GetMapping("/{deviceId}/hardware-events")
+    public ApiResponse<PageResponse<HardwareEventResponse>> listHardwareEvents(
+            @PathVariable String deviceId,
+            @RequestParam(defaultValue = "1") int page,
+            @RequestParam(defaultValue = "20") int pageSize,
+            @RequestParam(required = false)
+            @DateTimeFormat(iso = DateTimeFormat.ISO.DATE_TIME)
+            Instant from,
+            @RequestParam(required = false)
+            @DateTimeFormat(iso = DateTimeFormat.ISO.DATE_TIME)
+            Instant to
+    ) {
+        deviceService.requireAccess(deviceId);
+        return ApiResponse.success(
+                hardwareEventService.list(deviceId, page, pageSize, from, to)
+        );
+    }
+
+    @PostMapping("/{deviceId}/hardware-events")
+    public ApiResponse<HardwareEventResponse> createHardwareEvent(
+            @PathVariable String deviceId,
+            @Valid @RequestBody HardwareEventCreateRequest request
+    ) {
+        // 硬件生命周期事件：需要 OWNER 或 CONTROL 权限，ADMIN 全放行。
+        // 与 relay 事件共用权限模型，但不更新 relay_state。
+        deviceService.requireControlAccess(deviceId);
+        return ApiResponse.success(
+                hardwareEventService.record(deviceId, request)
         );
     }
 

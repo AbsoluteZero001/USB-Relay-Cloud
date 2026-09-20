@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import {ArrowRight, Cpu, RefreshCw, ScrollText} from "@lucide/vue";
-import {computed, onBeforeUnmount, onMounted, ref} from "vue";
+import {computed, onBeforeUnmount, onMounted, ref, watch} from "vue";
 import {RouterLink} from "vue-router";
 
 import EventLogList from "@/components/EventLogList.vue";
@@ -12,15 +12,28 @@ import {relayService} from "@/services/relay";
 import type {HardwareStatus} from "@/services/relay/hardware";
 import {useDeviceStore} from "@/stores/deviceStore";
 import {useEventStore} from "@/stores/eventStore";
+import {useHardwareEventStore} from "@/stores/hardwareEventStore";
 import {useRelayStore} from "@/stores/relayStore";
 import type {RelayExecutionResult} from "@/types/api";
 
 const deviceStore = useDeviceStore();
 const relayStore = useRelayStore();
 const eventStore = useEventStore();
+const hardwareEventStore = useHardwareEventStore();
 const refreshing = ref(false);
 
 const selectedDevice = computed(() => deviceStore.selectedDevice);
+
+// 把当前选中的设备 ID 同步给本地硬件 provider，
+// 这样 USB_ATTACHED / CONNECTED 等事件才能正确上报到服务端。
+watch(
+    () => selectedDevice.value?.deviceId ?? null,
+    (deviceId) => {
+      relayService.setLocalDeviceId(deviceId);
+    },
+    {immediate: true},
+);
+
 const relayState = computed(() => {
   const deviceId = selectedDevice.value?.deviceId;
   return deviceId ? relayStore.stateFor(deviceId, 1) : null;
@@ -29,6 +42,13 @@ const selectedEvents = computed(() => {
   const deviceId = selectedDevice.value?.deviceId;
   if (!deviceId) return [];
   return eventStore.events.filter((event) => event.deviceId === deviceId);
+});
+const selectedHardwareEvents = computed(() => {
+  const deviceId = selectedDevice.value?.deviceId;
+  if (!deviceId) return [];
+  return hardwareEventStore.events.filter(
+      (event) => event.deviceId === deviceId,
+  );
 });
 
 const hardwareStatus = ref<HardwareStatus>(relayService.getHardwareStatus());
@@ -43,6 +63,7 @@ async function refresh(): Promise<void> {
       await Promise.allSettled([
         relayStore.loadState(deviceId),
         eventStore.loadEvents(deviceId),
+        hardwareEventStore.loadEvents(deviceId),
       ]);
     }
   } finally {
@@ -143,7 +164,11 @@ onBeforeUnmount(() => {
           <ArrowRight :size="15" />
         </RouterLink>
       </div>
-      <EventLogList :events="selectedEvents" :limit="8" />
+      <EventLogList
+          :relay-events="selectedEvents"
+          :hardware-events="selectedHardwareEvents"
+          :limit="8"
+      />
     </section>
 
     <RouterLink

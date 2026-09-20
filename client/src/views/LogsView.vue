@@ -148,7 +148,8 @@ onMounted(() => {
 
       <EventLogList
         v-if="eventStore.events.length"
-        :events="eventStore.events"
+        :relay-events="eventStore.events"
+        :hardware-events="[]"
       />
       <div v-else class="empty-state compact">
         <ScrollText :size="24" />
