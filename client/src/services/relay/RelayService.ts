@@ -1,22 +1,18 @@
-import { createRelayEvent } from "@/api/eventApi";
-import {
-  getRelayRuntime,
-  type RelayRuntime,
-} from "./serial";
-import { createSerialAdapter } from "./serial";
-import { CloudRelayProvider } from "./providers/CloudRelayProvider";
-import {
-  LocalRelayProvider,
-} from "./providers/LocalRelayProvider";
+import {createRelayEvent} from "@/api/eventApi";
+import {createSerialAdapter, getRelayRuntime, type RelayRuntime,} from "./serial";
+import {CloudRelayProvider} from "./providers/CloudRelayProvider";
+import {LocalRelayProvider,} from "./providers/LocalRelayProvider";
+import type {HardwareStatus} from "./hardware/HardwareStatus";
+import type {RelayHardwareProfile} from "./hardware/HardwareProfile";
 import {EventOutbox, type OutboxFlushSummary} from "./EventOutbox";
 import type {
-  CloudSyncStatus,
+    CloudSyncStatus,
     CommandStatus,
-  RelayAction,
-  RelayExecutionResult,
-  RelayEvent,
+    RelayAction,
+    RelayEvent,
     RelayEventCreatePayload,
-  RelayStateValue,
+    RelayExecutionResult,
+    RelayStateValue,
 } from "@/types/api";
 
 const CLIENT_ID_STORAGE_KEY = "usb-relay-cloud-client-id";
@@ -67,12 +63,24 @@ export class RelayService {
   }
 
   isLocalControlConnected(): boolean {
-    return this.localProvider.getStatus().connected;
+      return this.localProvider.isHardwareConnected();
+  }
+
+    isHardwareConnected(): boolean {
+        return this.localProvider.isHardwareConnected();
+    }
+
+    isCommandExecuting(): boolean {
+        return this.localProvider.isCommandExecuting();
   }
 
   getLocalStatus() {
     return this.localProvider.getStatus();
   }
+
+    getHardwareStatus(): HardwareStatus {
+        return this.localProvider.getHardwareStatus();
+    }
 
   getLastLocalCommand() {
     return this.localProvider.getLastCommand();
@@ -84,9 +92,21 @@ export class RelayService {
     return this.localProvider.onStatusChange(listener);
   }
 
+    onHardwareStatusChange(
+        listener: (status: HardwareStatus) => void,
+    ): () => void {
+        return this.localProvider.onHardwareStatusChange(listener);
+    }
+
   listLocalPorts() {
     return this.localProvider.listPorts();
   }
+
+    scanAndMatch(): Promise<
+        { port: import("./serial/types").SerialPortInfo; profile: RelayHardwareProfile | null }[]
+    > {
+        return this.localProvider.scanAndMatch();
+    }
 
   requestLocalPort() {
     return this.localProvider.requestPort();
@@ -100,23 +120,36 @@ export class RelayService {
     return this.localProvider.disconnect();
   }
 
+    /**
+     * 执行本地继电器指令并同步云端。
+     *
+     * 严格语义（spec §4 / §10）：
+     * - 仅当本地硬件 CONNECTED 才尝试 USB 写入；否则直接 FAILED，不调用 write。
+     * - 写入成功 → commandedState=action、commandStatus=SUCCESS、POST 事件。
+     * - 写入失败 → commandedState=previousState（保持原值，不 optimistic update）、
+     *   commandStatus=FAILED、仍 POST FAILED 事件用于日志，但服务端不更新 relay_state。
+     * - 云端 commandedState 与本地硬件连接状态相互独立：
+     *   本地断开不会生成假的 OFF，也不会修改云端最后指令。
+     */
   async executeLocalCommand(
     deviceId: string,
     channel: number,
     action: RelayAction,
   ): Promise<RelayExecutionResult> {
-    const previousState = this.localProvider.getLastCommand().commandedState;
+        const previousState: RelayStateValue =
+            this.localProvider.getLastCommand().commandedState;
     const eventId = createId();
       const source = this.localProvider.getSource();
       const callerId = clientId();
 
-      // spec §4：USB 写入成功→生成 relay_event→POST；spec §19：FAILED
-      // 事件也要上传到 relay_event，但服务端不会更新 relay_state。
-      // 因此本地写入失败时仍以 commandStatus=FAILED 上传，便于日志记录。
       let localWriteSucceeded = false;
       let commandStatus: CommandStatus = "FAILED";
       let cloudSyncMessage: string | null = null;
 
+        // spec §4 step 3：RelayService 先检查 hardware provider 是否 CONNECTED。
+        if (!this.localProvider.isHardwareConnected()) {
+            cloudSyncMessage = `本地硬件未连接，无法执行 ${action} 指令`;
+        } else {
       try {
           await this.localProvider.execute({
               eventId,
@@ -133,16 +166,18 @@ export class RelayService {
               ? error.message
               : "本地 USB 写入失败";
       }
+        }
 
       // Phase 8：先入队（持久化），再立即 POST；
       // 200 → 出队；失败 → 保留在队列，等重连/启动重试。
       // 幂等：服务端 relay_event.event_id UNIQUE 保证重复 POST 安全。
+        // FAILED 事件也上传，便于日志记录；服务端只对 SUCCESS 更新 relay_state。
       const payload: RelayEventCreatePayload = {
           eventId,
           channel,
           action,
           previousState,
-          currentState: action,
+          currentState: localWriteSucceeded ? action : previousState,
           commandStatus,
           source,
           clientId: callerId,
@@ -166,7 +201,7 @@ export class RelayService {
       commandId: eventId,
       deviceId,
       channel,
-        commandedState: action,
+        commandedState: localWriteSucceeded ? action : previousState,
         commandStatus,
       hardwareState: "UNKNOWN",
         localWriteSucceeded,

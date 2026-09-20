@@ -1,13 +1,17 @@
 <script setup lang="ts">
-import {Activity, CircleHelp, Clock3, Power, Radio,} from "@lucide/vue";
+import {Activity, CircleHelp, Clock3, Cpu, Power, Radio, Usb,} from "@lucide/vue";
 import {computed} from "vue";
 
+import type {HardwareStatus} from "@/services/relay/hardware";
+import {hardwareStateLabel} from "@/services/relay/hardware";
+import {relayService} from "@/services/relay";
 import type {Device, RelayState} from "@/types/api";
 import {commandStatusLabel, formatDateTime, formatRelativeTime, onlineLabel, stateLabel,} from "@/utils/format";
 
 const props = defineProps<{
   device: Device | null;
   relayState: RelayState | null;
+  hardwareStatus: HardwareStatus;
 }>();
 
 const commandLabel = computed(
@@ -15,6 +19,14 @@ const commandLabel = computed(
 );
 const commandStatus = computed(
   () => props.relayState?.commandStatus ?? "FAILED",
+);
+const localSupported = computed(() => relayService.isLocalControlSupported());
+const localHardwareLabel = computed(() => {
+  if (!localSupported.value) return "不可用";
+  return hardwareStateLabel(props.hardwareStatus.state);
+});
+const localHardwareOnline = computed(
+    () => props.hardwareStatus.state === "CONNECTED",
 );
 </script>
 
@@ -41,12 +53,24 @@ const commandStatus = computed(
           <Power :size="28" />
         </span>
         <div>
-          <span>最近指令</span>
+          <span>云端最后指令</span>
           <strong>{{ stateLabel(commandLabel) }}</strong>
         </div>
       </div>
 
       <dl class="state-grid">
+        <div>
+          <dt>
+            <Usb :size="15"/>
+            本地硬件
+          </dt>
+          <dd
+              class="state-value"
+              :class="localHardwareOnline ? 'success' : 'unknown'"
+          >
+            {{ localHardwareLabel }}
+          </dd>
+        </div>
         <div>
           <dt>
             <Activity :size="15"/>
@@ -80,7 +104,19 @@ const commandStatus = computed(
           </dt>
           <dd>{{ formatDateTime(relayState?.updatedAt) }}</dd>
         </div>
+        <div>
+          <dt>
+            <Cpu :size="15"/>
+            设备在线
+          </dt>
+          <dd>{{ onlineLabel(device.onlineStatus) }}</dd>
+        </div>
       </dl>
+
+      <p class="inline-note">
+        云端最后指令与本地硬件连接状态相互独立：数据库记录的 ON/OFF
+        仅代表最后一次成功指令，不代表当前 USB 已连接或物理为该状态。
+      </p>
     </template>
 
     <div v-else class="empty-inline">

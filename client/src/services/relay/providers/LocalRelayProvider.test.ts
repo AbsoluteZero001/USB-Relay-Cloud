@@ -1,86 +1,358 @@
-import { describe, expect, it } from "vitest";
+import {createPinia, setActivePinia} from "pinia";
+import {beforeEach, describe, expect, it} from "vitest";
 
-import { LocalRelayProvider } from "./LocalRelayProvider";
+import {LocalRelayProvider} from "./LocalRelayProvider";
+import {useRelayStore} from "@/stores/relayStore";
+import type {RequestableSerialAdapter} from "../serial/SerialAdapter";
+import type {SerialOpenOptions, SerialPortInfo, SerialStatus,} from "../serial/types";
+import type {RelayAction, RelayEvent, RelayStateValue,} from "@/types/api";
 
-import type { SerialAdapter } from "../serial/SerialAdapter";
-import type {
-  SerialOpenOptions,
-  SerialPortInfo,
-  SerialStatus,
-} from "../serial/types";
-
-class FakeSerialAdapter implements SerialAdapter {
-  readonly name = "FakeAndroid";
-  readonly sent: number[][] = [];
-  private status: SerialStatus = {
-    state: "connected",
+function ch340Port(overrides: Partial<SerialPortInfo> = {}): SerialPortInfo {
+    return {
     port: "1",
-    device: "CH340",
+        device: "1 · USB-SERIAL CH340",
+        description: "USB-SERIAL CH340",
+        manufacturer: "QinHeng Electronics",
+        hwid: "VID_1A86&PID_7523",
+        vendorId: "1A86",
+        productId: "7523",
+        serialNumber: null,
+        isCurrent: false,
+        ...overrides,
+    };
+}
+
+function unsupportedPort(): SerialPortInfo {
+    return ch340Port({
+        vendorId: "9999",
+        productId: "0001",
+        description: "未知 USB 设备",
+        device: "1 · 未知 USB 设备",
+        hwid: "VID_9999&PID_0001",
+    });
+}
+
+function disconnectedStatus(): SerialStatus {
+    return {
+        state: "disconnected",
+        port: null,
+        device: null,
     baudRate: 9600,
-    connected: true,
+        connected: false,
     errorCode: null,
     detail: null,
   };
+}
+
+/**
+ * 可配置的串口适配器测试替身。
+ * 支持受控的端口列表、写入失败、连接失败，以及 USB 拔出事件模拟。
+ */
+class FakeSerialAdapter implements RequestableSerialAdapter {
+    readonly name = "FakeAndroid";
+    readonly sent: number[][] = [];
+    sendShouldFail = false;
+    connectShouldFail = false;
+    private ports: SerialPortInfo[];
+    private status: SerialStatus;
+    private readonly listeners = new Set<(status: SerialStatus) => void>();
+
+    constructor(ports: SerialPortInfo[] = [ch340Port()]) {
+        this.ports = ports;
+        this.status = disconnectedStatus();
+    }
 
   isSupported(): boolean {
     return true;
   }
 
-  listPorts(): Promise<SerialPortInfo[]> {
-    return Promise.resolve([]);
+    async listPorts(): Promise<SerialPortInfo[]> {
+        return [...this.ports];
   }
 
-  connect(
-    _portId: string,
-    _options: SerialOpenOptions,
+    async requestPort(): Promise<SerialPortInfo> {
+        const port = this.ports[0];
+        if (!port) {
+            throw new Error("没有可用串口");
+        }
+        return port;
+    }
+
+    async connect(
+        portId: string,
+        options: SerialOpenOptions,
   ): Promise<void> {
-    return Promise.resolve();
+        if (this.connectShouldFail) {
+            throw new Error("连接失败");
+        }
+        this.status = {
+            state: "connected",
+            port: portId,
+            device: portId,
+            baudRate: options.baudRate,
+            connected: true,
+            errorCode: null,
+            detail: null,
+        };
+        this.emit();
   }
 
-  disconnect(): Promise<void> {
-    return Promise.resolve();
+    async disconnect(): Promise<void> {
+        this.status = disconnectedStatus();
+        this.emit();
   }
 
-  send(data: Uint8Array): Promise<void> {
+    async send(data: Uint8Array): Promise<void> {
+        if (this.sendShouldFail) {
+            throw new Error("写入失败");
+        }
     this.sent.push(Array.from(data));
-    return Promise.resolve();
   }
 
   getStatus(): SerialStatus {
     return this.status;
   }
+
+    onStatusChange(listener: (status: SerialStatus) => void): () => void {
+        this.listeners.add(listener);
+        return () => this.listeners.delete(listener);
+    }
+
+    /** 模拟 USB 设备拔出（推送 error + SERIAL_DEVICE_DISCONNECTED）。 */
+    simulateDetach(): void {
+        this.status = {
+            state: "error",
+            port: null,
+            device: null,
+            baudRate: 9600,
+            connected: false,
+            errorCode: "SERIAL_DEVICE_DISCONNECTED",
+            detail: "USB 串口设备已拔出",
+        };
+        this.emit();
+    }
+
+    private emit(): void {
+        const current = this.getStatus();
+        for (const listener of this.listeners) {
+            listener(current);
+        }
+    }
 }
 
-describe("LocalRelayProvider protocol", () => {
-  it("keeps the verified LCUS-1 ON/OFF HEX bytes unchanged", async () => {
-    const adapter = new FakeSerialAdapter();
-    const provider = new LocalRelayProvider(adapter);
+const baseCommand = {
+    eventId: "00000000-0000-4000-8000-000000000001",
+    deviceId: "relay-001",
+    channel: 1,
+    previousState: "UNKNOWN" as RelayStateValue,
+    clientId: "android-tablet-001",
+};
 
-    await provider.execute({
-      eventId: "00000000-0000-4000-8000-000000000001",
-      deviceId: "relay-001",
-      channel: 1,
-      action: "ON",
-      previousState: "OFF",
-      clientId: "android-tablet-001",
+function command(
+    action: RelayAction,
+    overrides: Partial<typeof baseCommand> = {},
+) {
+    return {...baseCommand, action, ...overrides};
+}
+
+function successEvent(action: RelayAction, sequence: number): RelayEvent {
+    return {
+        sequence,
+        eventId: `00000000-0000-4000-8000-${sequence.toString().padStart(12, "0")}`,
+        deviceId: "relay-001",
+        channel: 1,
+        action,
+        previousState: action === "ON" ? "OFF" : "ON",
+        currentState: action,
+        commandStatus: "SUCCESS",
+        source: "ANDROID",
+        clientId: "android-tablet-002",
+        hardwareState: "UNKNOWN",
+        createdAt: "2026-09-20T10:00:00Z",
+        idempotentReplay: false,
+    };
+}
+
+describe("LocalRelayProvider hardware gate", () => {
+    beforeEach(() => {
+        setActivePinia(createPinia());
     });
-    await provider.execute({
-      eventId: "00000000-0000-4000-8000-000000000002",
-      deviceId: "relay-001",
-      channel: 1,
-      action: "OFF",
-      previousState: "ON",
-      clientId: "android-tablet-001",
+
+    // spec §13.1：DISCONNECTED 时 ON 不允许写入、不产生 SUCCESS。
+    it("rejects ON command while DISCONNECTED without touching hardware", async () => {
+        const adapter = new FakeSerialAdapter();
+        const provider = new LocalRelayProvider(adapter);
+        provider.onHardwareStatusChange(() => {
+        });
+
+        await expect(provider.execute(command("ON"))).rejects.toThrow(
+            /未连接/,
+        );
+
+        expect(adapter.sent).toEqual([]);
+        expect(provider.getLastCommand().commandedState).toBe("UNKNOWN");
+        expect(provider.getLastCommand().commandStatus).toBeNull();
+        expect(provider.isHardwareConnected()).toBe(false);
     });
+
+    // spec §13.2：UNSUPPORTED USB 不允许控制。
+    it("marks unsupported USB devices and refuses to connect", async () => {
+        const adapter = new FakeSerialAdapter([unsupportedPort()]);
+        const provider = new LocalRelayProvider(adapter);
+        provider.onHardwareStatusChange(() => {
+        });
+
+        const matched = await provider.scanAndMatch();
+        expect(matched[0]?.profile).toBeNull();
+        expect(provider.getHardwareStatus().state).toBe("UNSUPPORTED");
+
+        await expect(provider.connect("1")).rejects.toThrow(/不受支持|未检测/);
+        expect(provider.isHardwareConnected()).toBe(false);
+    });
+
+    // spec §13.3 / §十四 场景 D：CONNECTED + write ON 成功。
+    it("writes verified LCUS-1 bytes on success and updates commandedState", async () => {
+        const adapter = new FakeSerialAdapter();
+        const provider = new LocalRelayProvider(adapter);
+        provider.onHardwareStatusChange(() => {
+        });
+
+        await provider.scanAndMatch();
+        await provider.connect("1");
+        expect(provider.isHardwareConnected()).toBe(true);
+
+        const onResult = await provider.execute(command("ON"));
+        const offResult = await provider.execute(
+            command("OFF", {previousState: "ON"}),
+        );
 
     expect(adapter.sent).toEqual([
       [0xa0, 0x01, 0x01, 0xa2],
       [0xa0, 0x01, 0x00, 0xa1],
     ]);
+        expect(onResult.commandedState).toBe("ON");
+        expect(offResult.commandedState).toBe("OFF");
     expect(provider.getLastCommand()).toEqual({
       commandedState: "OFF",
       commandStatus: "SUCCESS",
       hardwareState: "UNKNOWN",
     });
   });
+
+    // spec §13.4：CONNECTED + 写入失败 → FAILED，状态不变。
+    it("keeps commandedState unchanged when write fails", async () => {
+        const adapter = new FakeSerialAdapter();
+        const provider = new LocalRelayProvider(adapter);
+        provider.onHardwareStatusChange(() => {
+        });
+
+        await provider.scanAndMatch();
+        await provider.connect("1");
+        adapter.sendShouldFail = true;
+
+        await expect(provider.execute(command("ON"))).rejects.toThrow(
+            /写入失败/,
+        );
+
+        expect(adapter.sent).toEqual([]);
+        expect(provider.getLastCommand().commandedState).toBe("UNKNOWN");
+        expect(provider.getLastCommand().commandStatus).toBe("FAILED");
+    });
+
+    // spec §13.5 / §十一：USB 拔出 → DISCONNECTED，滑块禁用。
+    it("transitions to DISCONNECTED on USB detach and resets local state", async () => {
+        const adapter = new FakeSerialAdapter();
+        const provider = new LocalRelayProvider(adapter);
+        provider.onHardwareStatusChange(() => {
+        });
+
+        await provider.scanAndMatch();
+        await provider.connect("1");
+        await provider.execute(command("ON"));
+        expect(provider.isHardwareConnected()).toBe(true);
+
+        adapter.simulateDetach();
+
+        expect(provider.getHardwareStatus().state).toBe("DISCONNECTED");
+        expect(provider.getHardwareStatus().commandedState).toBe("UNKNOWN");
+        expect(provider.isHardwareConnected()).toBe(false);
+
+        await expect(provider.execute(command("OFF"))).rejects.toThrow(
+            /未连接/,
+        );
+    });
+
+    // spec §13.6 / §十二：WebSocket 远端 ON 不改变本地硬件连接状态。
+    it("keeps local hardware state independent from relayStore cloud events", async () => {
+        const adapter = new FakeSerialAdapter();
+        const provider = new LocalRelayProvider(adapter);
+        provider.onHardwareStatusChange(() => {
+        });
+
+        const relayStore = useRelayStore();
+        relayStore.applyEvent(successEvent("ON", 5));
+
+        // 云端 commandedState 已更新为 ON。
+        expect(relayStore.stateFor("relay-001", 1)?.commandedState).toBe("ON");
+        // 本地硬件连接状态不受影响，仍为 DISCONNECTED，滑块禁用。
+        expect(provider.getHardwareStatus().state).toBe("DISCONNECTED");
+        expect(provider.isHardwareConnected()).toBe(false);
+    });
+
+    // spec §13.7 / §九：连续快速操作，并发锁有效。
+    it("serializes concurrent commands via the executing lock", async () => {
+        const adapter = new FakeSerialAdapter();
+        const provider = new LocalRelayProvider(adapter);
+        provider.onHardwareStatusChange(() => {
+        });
+
+        await provider.scanAndMatch();
+        await provider.connect("1");
+
+        const results = await Promise.allSettled([
+            provider.execute(command("ON")),
+            provider.execute(command("ON", {
+                eventId: "00000000-0000-4000-8000-000000000002",
+            })),
+        ]);
+
+        const rejected = results.filter(
+            (r) => r.status === "rejected",
+        );
+        expect(rejected).toHaveLength(1);
+        // 仅一次 USB 写入。
+        expect(adapter.sent).toEqual([[0xa0, 0x01, 0x01, 0xa2]]);
+    });
+});
+
+describe("relayStore FAILED semantics", () => {
+    beforeEach(() => {
+        setActivePinia(createPinia());
+    });
+
+    it("FAILED cloud event does not advance commandedState", () => {
+        const store = useRelayStore();
+        // 先建立一个 SUCCESS ON 基线。
+        store.applyEvent(successEvent("ON", 3));
+        // 收到一条 FAILED ON 事件（远端写入失败）。
+        const failedEvent: RelayEvent = {
+            ...successEvent("ON", 4),
+            commandStatus: "FAILED",
+        };
+        store.applyEvent(failedEvent);
+
+        const state = store.stateFor("relay-001", 1);
+        expect(state?.commandedState).toBe("ON");
+        expect(state?.commandStatus).toBe("FAILED");
+    });
+
+    it("applyLocalCommand with FAILED keeps existing commandedState", () => {
+        const store = useRelayStore();
+        store.applyLocalCommand("relay-001", 1, "ON", "SUCCESS");
+        store.applyLocalCommand("relay-001", 1, "OFF", "FAILED");
+
+        const state = store.stateFor("relay-001", 1);
+        expect(state?.commandedState).toBe("ON");
+        expect(state?.commandStatus).toBe("FAILED");
+    });
 });

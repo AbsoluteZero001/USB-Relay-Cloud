@@ -1,105 +1,199 @@
-import type { SerialAdapter } from "../serial";
-import type { SerialPortInfo, SerialStatus } from "../serial/types";
-import type {
-  RelayProvider,
-  RelayProviderCommand,
-  RelayProviderExecution,
-} from "./RelayProvider";
+import {matchHardwareProfile, type RelayHardwareProfile,} from "../hardware/HardwareProfile";
+import {type HardwareConnectionState, hardwareStateLabel, type HardwareStatus,} from "../hardware/HardwareStatus";
+import type {SerialAdapter} from "../serial/SerialAdapter";
+import type {SerialPortInfo, SerialStatus} from "../serial/types";
+import type {RelayProvider, RelayProviderCommand, RelayProviderExecution,} from "./RelayProvider";
 
-import type {
-  CommandStatus,
-  EventSource,
-  RelayAction,
-  RelayStateValue,
-} from "@/types/api";
+import type {CommandStatus, EventSource, RelayAction, RelayStateValue,} from "@/types/api";
 
-export interface RelayProtocolConfig {
-  baudRate: number;
-  dataBits: 5 | 6 | 7 | 8;
-  stopBits: 1 | 1.5 | 2;
-  parity: "none" | "even" | "odd" | "mark" | "space";
-  flowControl: "none" | "software" | "hardware";
-  onCommand: Uint8Array;
-  offCommand: Uint8Array;
+function errorMessage(error: unknown): string {
+    if (error instanceof Error) return error.message;
+    if (typeof error === "string") return error;
+    return "本地 USB 操作失败";
 }
 
-export const DEFAULT_RELAY_PROTOCOL: RelayProtocolConfig = {
-  baudRate: 9600,
-  dataBits: 8,
-  stopBits: 1,
-  parity: "none",
-  flowControl: "none",
-  // Verified on CH340 + LCUS-1. Do not replace without hardware validation.
-  onCommand: new Uint8Array([0xa0, 0x01, 0x01, 0xa2]),
-  offCommand: new Uint8Array([0xa0, 0x01, 0x00, 0xa1]),
-};
-
+/**
+ * 本地 USB 继电器 Provider。
+ *
+ * 严格状态约束（修复历史 Bug）：
+ * - 只有 hardwareState === CONNECTED 才允许执行指令。
+ * - 执行指令前必须匹配到受支持的 HardwareProfile。
+ * - USB 写入成功后才更新本地 commandedState；写入失败保持原状态，
+ *   不产生假 SUCCESS，不改云端 relay_state。
+ * - LCUS-1 无已验证状态回读，hardwareState 始终为 UNKNOWN。
+ *
+ * 云端 commandedState 与本地硬件连接状态是两个独立概念：
+ * - 本地硬件断开不会修改云端最后指令，也不生成假的 OFF 事件。
+ */
 export class LocalRelayProvider implements RelayProvider {
   readonly id = "LOCAL" as const;
 
   private commandedState: RelayStateValue = "UNKNOWN";
   private commandStatus: CommandStatus | null = null;
-  private busy = false;
+    private commandExecuting = false;
+    private matchedProfile: RelayHardwareProfile | null = null;
+    private lastPorts: SerialPortInfo[] = [];
 
-  constructor(
-    private readonly adapter: SerialAdapter,
-    private readonly protocol = DEFAULT_RELAY_PROTOCOL,
-  ) {}
+    private hardwareState: HardwareConnectionState = "DISCONNECTED";
+    private hardwareErrorCode: string | null = null;
+    private hardwareErrorDetail: string | null = null;
+
+    private adapterSubscribed = false;
+    private readonly statusListeners = new Set<(status: SerialStatus) => void>();
+    private readonly hardwareListeners = new Set<(status: HardwareStatus) => void>();
+
+    constructor(private readonly adapter: SerialAdapter) {
+    }
 
   isAvailable(): boolean {
     return this.adapter.isSupported();
   }
 
-  async listPorts() {
-    return this.adapter.listPorts();
+    async listPorts(): Promise<SerialPortInfo[]> {
+        const ports = await this.adapter.listPorts();
+        this.lastPorts = ports;
+        return ports;
   }
 
-  async requestPort() {
+    /**
+     * 扫描 USB 设备并尝试匹配受支持的 HardwareProfile。
+     * 返回每个端口及其匹配到的配置（未匹配则为 null）。
+     * 同时更新硬件状态机：DETECTED / UNSUPPORTED / DISCONNECTED。
+     */
+    async scanAndMatch(): Promise<
+        { port: SerialPortInfo; profile: RelayHardwareProfile | null }[]
+    > {
+        this.hardwareState = "SCANNING";
+        this.hardwareErrorCode = null;
+        this.hardwareErrorDetail = null;
+        this.emitHardwareStatus();
+
+        let ports: SerialPortInfo[];
+        try {
+            ports = await this.adapter.listPorts();
+        } catch (error) {
+            this.lastPorts = [];
+            this.hardwareState = "ERROR";
+            this.hardwareErrorCode = "SCAN_FAILED";
+            this.hardwareErrorDetail = errorMessage(error);
+            this.emitHardwareStatus();
+            throw error;
+        }
+        this.lastPorts = ports;
+        const matched = ports.map((port) => ({
+            port,
+            profile: matchHardwareProfile(port),
+        }));
+        const hasMatch = matched.some((entry) => entry.profile);
+        if (ports.length === 0) {
+            this.hardwareState = "DISCONNECTED";
+        } else if (hasMatch) {
+            this.hardwareState = "DETECTED";
+        } else {
+            this.hardwareState = "UNSUPPORTED";
+            this.hardwareErrorCode = "UNSUPPORTED_DEVICE";
+            this.hardwareErrorDetail = "检测到 USB 设备，但不支持（需要 CH340 + LCUS-1）";
+        }
+        this.emitHardwareStatus();
+        return matched;
+    }
+
+    async requestPort(): Promise<SerialPortInfo> {
     const requestable = this.adapter as SerialAdapter & {
       requestPort?: () => Promise<SerialPortInfo>;
     };
     if (requestable.requestPort) {
-      return requestable.requestPort();
+        const port = await requestable.requestPort();
+        // 刷新端口缓存，保证 connect() 能匹配到 profile
+        try {
+            this.lastPorts = await this.adapter.listPorts();
+        } catch {
+            // 保留 requestPort 返回的端口信息
+            this.lastPorts = this.lastPorts.includes(port)
+                ? this.lastPorts
+                : [...this.lastPorts, port];
+        }
+        return port;
     }
-    const ports = await this.adapter.listPorts();
-    const first = ports[0];
-    if (!first) {
-      throw new Error("未发现可用串口");
-    }
-    return first;
+        const matched = await this.scanAndMatch();
+        const supported = matched.find((entry) => entry.profile);
+        if (!supported) {
+            throw new Error("未发现受支持的 USB 继电器");
+        }
+        return supported.port;
   }
 
   async connect(portId: string): Promise<void> {
-    await this.adapter.connect(portId, {
-      baudRate: this.protocol.baudRate,
-      dataBits: this.protocol.dataBits,
-      stopBits: this.protocol.stopBits,
-      parity: this.protocol.parity,
-      flowControl: this.protocol.flowControl,
-    });
-    this.commandedState = "UNKNOWN";
-    this.commandStatus = null;
+      let port = this.lastPorts.find((entry) => entry.port === portId) ?? null;
+      if (!port) {
+          try {
+              this.lastPorts = await this.adapter.listPorts();
+              port = this.lastPorts.find((entry) => entry.port === portId) ?? null;
+          } catch {
+              // 忽略列举失败，继续以无 profile 处理
+          }
+      }
+      const profile = port ? matchHardwareProfile(port) : null;
+      if (!profile) {
+          this.matchedProfile = null;
+          this.hardwareState = "UNSUPPORTED";
+          this.hardwareErrorCode = "UNSUPPORTED_DEVICE";
+          this.hardwareErrorDetail = "未检测到受支持的 USB 继电器（需要 CH340 + LCUS-1）";
+          this.emitHardwareStatus();
+          throw new Error(this.hardwareErrorDetail);
+      }
+      this.matchedProfile = profile;
+      this.hardwareState = "CONNECTING";
+      this.hardwareErrorCode = null;
+      this.hardwareErrorDetail = null;
+      this.emitHardwareStatus();
+      try {
+          await this.adapter.connect(portId, {
+              baudRate: profile.baudRate,
+              dataBits: profile.dataBits,
+              stopBits: profile.stopBits,
+              parity: profile.parity,
+              flowControl: profile.flowControl,
+          });
+          this.hardwareState = "CONNECTED";
+          this.commandedState = "UNKNOWN";
+          this.commandStatus = null;
+          this.hardwareErrorCode = null;
+          this.hardwareErrorDetail = null;
+          this.emitHardwareStatus();
+      } catch (error) {
+          this.hardwareState = "ERROR";
+          this.hardwareErrorCode = "SERIAL_OPEN_FAILED";
+          this.hardwareErrorDetail = errorMessage(error);
+          this.emitHardwareStatus();
+          throw error;
+      }
   }
 
   async disconnect(): Promise<void> {
-    await this.adapter.disconnect();
-    this.commandedState = "UNKNOWN";
-    this.commandStatus = null;
+      try {
+          await this.adapter.disconnect();
+      } finally {
+          this.commandedState = "UNKNOWN";
+          this.commandStatus = null;
+          this.matchedProfile = null;
+          this.hardwareState = "DISCONNECTED";
+          this.hardwareErrorCode = null;
+          this.hardwareErrorDetail = null;
+          this.emitHardwareStatus();
+      }
   }
 
-  getStatus() {
+    getStatus(): SerialStatus {
     return this.adapter.getStatus();
   }
 
   onStatusChange(
     listener: (status: SerialStatus) => void,
   ): () => void {
-    const subscribable = this.adapter as SerialAdapter & {
-      onStatusChange?: (
-        callback: (status: SerialStatus) => void,
-      ) => () => void;
-    };
-    return subscribable.onStatusChange?.(listener) ?? (() => undefined);
+      this.statusListeners.add(listener);
+      this.trySubscribeAdapter();
+      return () => this.statusListeners.delete(listener);
   }
 
   getLastCommand(): {
@@ -121,21 +215,72 @@ export class LocalRelayProvider implements RelayProvider {
     return "WEB";
   }
 
+    isHardwareConnected(): boolean {
+        return this.hardwareState === "CONNECTED";
+    }
+
+    isCommandExecuting(): boolean {
+        return this.commandExecuting;
+    }
+
+    getHardwareStatus(): HardwareStatus {
+        return {
+            state: this.hardwareState,
+            matchedProfile: this.matchedProfile,
+            commandedState: this.commandedState,
+            commandStatus: this.commandStatus,
+            executing: this.commandExecuting,
+            lastPorts: this.lastPorts,
+            errorCode: this.hardwareErrorCode,
+            errorDetail: this.hardwareErrorDetail,
+        };
+    }
+
+    onHardwareStatusChange(
+        listener: (status: HardwareStatus) => void,
+    ): () => void {
+        this.hardwareListeners.add(listener);
+        this.trySubscribeAdapter();
+        listener(this.getHardwareStatus());
+        return () => this.hardwareListeners.delete(listener);
+    }
+
+    /**
+     * 执行继电器指令。
+     *
+     * 严格约束：
+     * 1. 已有指令在执行 → 拒绝（并发锁）。
+     * 2. hardwareState !== CONNECTED → 拒绝，不调用 adapter.send。
+     * 3. 未匹配 HardwareProfile → 拒绝。
+     * 4. 仅当 adapter.send 成功才更新 commandedState=action、commandStatus=SUCCESS。
+     * 5. send 失败 → commandStatus=FAILED，commandedState 保持原值（不 optimistic update）。
+     */
   async execute(
     command: RelayProviderCommand,
   ): Promise<RelayProviderExecution> {
-    if (this.busy) {
+        if (this.commandExecuting) {
       throw new Error("已有继电器指令正在执行");
     }
+        if (this.hardwareState !== "CONNECTED") {
+            throw new Error(
+                `本地硬件未连接，当前状态：${hardwareStateLabel(this.hardwareState)}`,
+            );
+        }
+        if (!this.matchedProfile) {
+            throw new Error("未匹配到受支持的硬件配置，无法执行指令");
+        }
+        const profile = this.matchedProfile;
     if (command.channel !== 1) {
-      throw new Error("当前 LCUS-1 配置只验证了通道 1");
+        throw new Error(`当前 ${profile.name} 仅验证了通道 1`);
     }
-    this.busy = true;
+        this.commandExecuting = true;
+        this.emitHardwareStatus();
     try {
-      const bytes = this.commandBytes(command.action);
+        const bytes = this.commandBytes(command.action, profile);
       await this.adapter.send(bytes);
       this.commandedState = command.action;
       this.commandStatus = "SUCCESS";
+        this.emitHardwareStatus();
       return {
         commandId: command.eventId,
         deviceId: command.deviceId,
@@ -147,15 +292,86 @@ export class LocalRelayProvider implements RelayProvider {
       };
     } catch (error) {
       this.commandStatus = "FAILED";
+        this.emitHardwareStatus();
       throw error;
     } finally {
-      this.busy = false;
+        this.commandExecuting = false;
+        this.emitHardwareStatus();
     }
+    }
+
+    private commandBytes(
+        action: RelayAction,
+        profile: RelayHardwareProfile,
+    ): Uint8Array {
+        return action === "ON" ? profile.onCommand : profile.offCommand;
+    }
+
+    private trySubscribeAdapter(): void {
+        if (this.adapterSubscribed) {
+            return;
+        }
+        const subscribable = this.adapter as SerialAdapter & {
+            onStatusChange?: (callback: (status: SerialStatus) => void) => () => void;
+        };
+        if (!subscribable.onStatusChange) {
+            return;
+    }
+        this.adapterSubscribed = true;
+        subscribable.onStatusChange((status) => this.handleAdapterStatus(status));
   }
 
-  private commandBytes(action: RelayAction): Uint8Array {
-    return action === "ON"
-      ? this.protocol.onCommand
-      : this.protocol.offCommand;
+    private handleAdapterStatus(serial: SerialStatus): void {
+        this.recomputeHardwareState(serial);
+        for (const listener of this.statusListeners) {
+            listener(serial);
+        }
+    }
+
+    private recomputeHardwareState(serial: SerialStatus): void {
+        const detached = serial.errorCode === "SERIAL_DEVICE_DISCONNECTED";
+        let next: HardwareConnectionState;
+        if (detached) {
+            next = "DISCONNECTED";
+        } else {
+            switch (serial.state) {
+                case "disconnected":
+                    next = "DISCONNECTED";
+                    break;
+                case "waiting_permission":
+                    next = "PERMISSION_REQUIRED";
+                    break;
+                case "connecting":
+                    next = "CONNECTING";
+                    break;
+                case "connected":
+                    next = this.matchedProfile ? "CONNECTED" : "CONNECTING";
+                    break;
+                default:
+                    next = "ERROR";
+                    break;
+            }
+        }
+        this.hardwareErrorCode = serial.errorCode;
+        this.hardwareErrorDetail = serial.detail;
+        if (
+            next === "DISCONNECTED" &&
+            this.hardwareState !== "DISCONNECTED"
+        ) {
+            // USB 拔出或断开：重置本地指令状态。
+            // 不修改云端 commandedState，不生成假的 OFF 事件。
+            this.commandedState = "UNKNOWN";
+            this.commandStatus = null;
+            this.matchedProfile = null;
+        }
+        this.hardwareState = next;
+        this.emitHardwareStatus();
+    }
+
+    private emitHardwareStatus(): void {
+        const status = this.getHardwareStatus();
+        for (const listener of this.hardwareListeners) {
+            listener(status);
+        }
   }
 }

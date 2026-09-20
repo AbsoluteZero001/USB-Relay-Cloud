@@ -1,11 +1,13 @@
 <script setup lang="ts">
 import {ArrowRight, Cpu, RefreshCw, ScrollText,} from "@lucide/vue";
-import {computed, ref} from "vue";
+import {computed, onBeforeUnmount, onMounted, ref} from "vue";
 import {RouterLink} from "vue-router";
 
 import EventLogList from "@/components/EventLogList.vue";
 import LocalRelayPanel from "@/components/LocalRelayPanel.vue";
 import StatePanel from "@/components/StatePanel.vue";
+import {relayService} from "@/services/relay";
+import type {HardwareStatus} from "@/services/relay/hardware";
 import {useDeviceStore} from "@/stores/deviceStore";
 import {useEventStore} from "@/stores/eventStore";
 import {useRelayStore} from "@/stores/relayStore";
@@ -27,6 +29,12 @@ const selectedEvents = computed(() => {
   return eventStore.events.filter((event) => event.deviceId === deviceId);
 });
 
+// 本地硬件状态由 RelayService / LocalRelayProvider 维护，独立于云端 relay_state。
+// WebSocket 收到 RELAY_STATE_CHANGED 只会更新 relayStore.commandedState，
+// 不会改变本地 hardwareConnectionState（spec §12）。
+const hardwareStatus = ref<HardwareStatus>(relayService.getHardwareStatus());
+let unsubscribeHardware: (() => void) | null = null;
+
 async function refresh(): Promise<void> {
   refreshing.value = true;
   try {
@@ -44,16 +52,31 @@ async function refresh(): Promise<void> {
 }
 
 function applyLocalResult(result: RelayExecutionResult): void {
+  // spec §4：云端事件回执优先；写入失败时不推进本地 commandedState。
   if (result.cloudEvent && eventStore.appendEvent(result.cloudEvent)) {
     relayStore.applyEvent(result.cloudEvent);
-  } else {
+    return;
+  }
+  if (result.commandStatus === "SUCCESS") {
     relayStore.applyLocalCommand(
       result.deviceId,
       result.channel,
       result.commandedState,
+        "SUCCESS",
     );
   }
+  // FAILED：不更新 relayStore commandedState，UI 保持原状态。
 }
+
+onMounted(() => {
+  unsubscribeHardware = relayService.onHardwareStatusChange((next) => {
+    hardwareStatus.value = next;
+  });
+});
+
+onBeforeUnmount(() => {
+  unsubscribeHardware?.();
+});
 </script>
 
 <template>
@@ -99,9 +122,11 @@ function applyLocalResult(result: RelayExecutionResult): void {
       <StatePanel
         :device="selectedDevice"
         :relay-state="relayState"
+        :hardware-status="hardwareStatus"
       />
       <LocalRelayPanel
         :device-id="selectedDevice?.deviceId ?? null"
+        :hardware-status="hardwareStatus"
         @completed="applyLocalResult"
       />
     </div>
