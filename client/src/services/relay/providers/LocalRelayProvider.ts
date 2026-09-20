@@ -1,6 +1,7 @@
 import {
     describeUnsupportedPort,
     matchHardwareProfile,
+    matchHardwareProfileOrGeneric,
     type RelayHardwareProfile,
 } from "../hardware/HardwareProfile";
 import {type HardwareConnectionState, hardwareStateLabel, type HardwareStatus,} from "../hardware/HardwareStatus";
@@ -53,6 +54,8 @@ export class LocalRelayProvider implements RelayProvider {
   private commandStatus: CommandStatus | null = null;
     private commandExecuting = false;
     private matchedProfile: RelayHardwareProfile | null = null;
+    /** true 表示未识别出具体型号，使用通用串口配置 */
+    private matchedProfileGeneric = false;
     private lastPorts: SerialPortInfo[] = [];
 
     private hardwareState: HardwareConnectionState = "DISCONNECTED";
@@ -95,9 +98,16 @@ export class LocalRelayProvider implements RelayProvider {
      * 同时更新硬件状态机：DETECTED / UNSUPPORTED / DISCONNECTED。
      */
     async scanAndMatch(): Promise<
-        { port: SerialPortInfo; profile: RelayHardwareProfile | null }[]
+        {
+            port: SerialPortInfo;
+            profile: RelayHardwareProfile | null;
+            generic: boolean;
+        }[]
     > {
         this.trySubscribeDeviceChange();
+        // 先让内部状态与适配器真实状态对齐：物理拔出后即使 UI 层没收到
+        // 事件，也绝不允许继续保留 CONNECTED（幽灵端口）。
+        this.recomputeHardwareState(this.adapter.getStatus());
         // 重新扫描不能破坏已经建立的连接：只要当前串口仍在列表中，
         // 扫描结束后必须回到 CONNECTED，而不是降级为 DETECTED。
         const wasConnected = this.hardwareState === "CONNECTED";
@@ -122,18 +132,47 @@ export class LocalRelayProvider implements RelayProvider {
             throw error;
         }
         this.lastPorts = ports;
-        const matched = ports.map((port) => ({
-            port,
-            profile: matchHardwareProfile(port),
-        }));
-        const hasMatch = matched.some((entry) => entry.profile);
+        const matched = ports.map((port) => {
+            const match = matchHardwareProfileOrGeneric(port);
+            return {
+                port,
+                profile: match?.profile ?? null,
+                generic: match?.generic ?? false,
+            };
+        });
+        // Web Serial 的 getPorts() 会一直返回已授权但已经物理拔出的端口，
+        // 这类端口只能显示在列表里，不能算「检测到可用设备」。
+        const presentPorts = ports.filter(
+            (port) => port.physicallyPresent !== false,
+        );
+        const absentPorts = ports.filter(
+            (port) => port.physicallyPresent === false,
+        );
+        const hasMatch = matched.some(
+            (entry) => entry.profile
+                && entry.port.physicallyPresent !== false,
+        );
         const connectedStillPresent = wasConnected
             && !!connectedPortId
-            && ports.some((port) => port.port === connectedPortId);
+            // getPorts()/getDeviceList() 只能证明「存在」，
+            // 不能证明「串口还 open 着」——必须同时满足适配器报告已连接。
+            && this.adapter.getStatus().connected
+            && ports.some(
+                (port) => port.port === connectedPortId
+                    && port.physicallyPresent !== false,
+            );
         if (connectedStillPresent) {
             this.hardwareState = "CONNECTED";
         } else if (ports.length === 0) {
+            // 从未连接过且一个设备都没有 → NO_DEVICE；
+            // 连接过再断开由 recomputeHardwareState 标记 DISCONNECTED。
+            this.hardwareState = wasConnected ? "DISCONNECTED" : "NO_DEVICE";
+        } else if (presentPorts.length === 0 && absentPorts.length > 0) {
+            // 已授权端口全部处于物理拔出状态：保留设备信息，
+            // 但状态必须是「已断开」，绝不能再显示 CONNECTED / DETECTED。
             this.hardwareState = "DISCONNECTED";
+            this.hardwareErrorCode = "SERIAL_DEVICE_DISCONNECTED";
+            this.hardwareErrorDetail = "USB 设备已拔出，请重新插入设备并连接。";
         } else if (hasMatch) {
             this.hardwareState = "DETECTED";
             // 检测到受支持的 USB 设备 → 上报 USB_ATTACHED
@@ -141,6 +180,16 @@ export class LocalRelayProvider implements RelayProvider {
             if (matchedEntry) {
                 // 扫描阶段就记录匹配到的配置，UI 可在连接前显示设备型号。
                 this.matchedProfile = matchedEntry.profile;
+                this.matchedProfileGeneric = matchedEntry.generic;
+                if (matchedEntry.generic) {
+                    hardwareLog.warn(
+                        "未识别出 LCUS-1 型号，使用通用串口配置",
+                        `${matchedEntry.port.device} `
+                        + `VID=${matchedEntry.port.vendorId ?? "未知"} `
+                        + `PID=${matchedEntry.port.productId ?? "未知"} `
+                        + `驱动=${matchedEntry.port.driverName ?? "未知"}`,
+                    );
+                }
                 this.emitHardwareEvent("USB_ATTACHED", {
                     port: matchedEntry.port,
                     profile: matchedEntry.profile,
@@ -149,6 +198,7 @@ export class LocalRelayProvider implements RelayProvider {
         } else {
             this.hardwareState = "UNSUPPORTED";
             this.matchedProfile = null;
+            this.matchedProfileGeneric = false;
             this.hardwareErrorCode = "UNSUPPORTED_DEVICE";
             const firstPort = ports[0];
             this.hardwareErrorDetail = firstPort
@@ -206,9 +256,19 @@ export class LocalRelayProvider implements RelayProvider {
               // 忽略列举失败，继续以无 profile 处理
           }
       }
-      const profile = port ? matchHardwareProfile(port) : null;
+      if (port?.physicallyPresent === false) {
+          // 幽灵端口：已授权但物理已拔出
+          this.hardwareState = "DISCONNECTED";
+          this.hardwareErrorCode = "SERIAL_DEVICE_DISCONNECTED";
+          this.hardwareErrorDetail = "USB 设备已拔出，请重新插入后再连接。";
+          this.emitHardwareStatus();
+          throw new Error(this.hardwareErrorDetail);
+      }
+      const match = port ? matchHardwareProfileOrGeneric(port) : null;
+      const profile = match?.profile ?? null;
       if (!profile) {
           this.matchedProfile = null;
+          this.matchedProfileGeneric = false;
           this.hardwareState = "UNSUPPORTED";
           this.hardwareErrorCode = "UNSUPPORTED_DEVICE";
           this.hardwareErrorDetail = port
@@ -219,6 +279,14 @@ export class LocalRelayProvider implements RelayProvider {
           throw new Error(this.hardwareErrorDetail);
       }
       this.matchedProfile = profile;
+      this.matchedProfileGeneric = match?.generic ?? false;
+      if (match?.generic) {
+          hardwareLog.warn(
+              "使用通用串口配置连接",
+              `deviceId=${portId} 未识别为 LCUS-1（VID/PID 不匹配），`
+              + "按 9600 8N1 + LCUS-1 指令发送",
+          );
+      }
       this.hardwareState = "CONNECTING";
       this.hardwareErrorCode = null;
       this.hardwareErrorDetail = null;
@@ -275,6 +343,7 @@ export class LocalRelayProvider implements RelayProvider {
           this.commandedState = "UNKNOWN";
           this.commandStatus = null;
           this.matchedProfile = null;
+          this.matchedProfileGeneric = false;
           this.hardwareState = "DISCONNECTED";
           this.hardwareErrorCode = null;
           this.hardwareErrorDetail = null;
@@ -396,14 +465,28 @@ export class LocalRelayProvider implements RelayProvider {
     command: RelayProviderCommand,
   ): Promise<RelayProviderExecution> {
         if (this.commandExecuting) {
+            hardwareLog.warn(
+                "canControl=false reason=WRITE_IN_PROGRESS",
+                `action=${command.action}`,
+            );
       throw new Error("已有继电器指令正在执行");
     }
         if (this.hardwareState !== "CONNECTED") {
+            hardwareLog.warn(
+                "canControl=false reason=SERIAL_NOT_CONNECTED",
+                `state=${this.hardwareState} `
+                + `label=${hardwareStateLabel(this.hardwareState)} `
+                + `action=${command.action}`,
+            );
             throw new Error(
                 `本地硬件未连接，当前状态：${hardwareStateLabel(this.hardwareState)}`,
             );
         }
         if (!this.matchedProfile) {
+            hardwareLog.warn(
+                "canControl=false reason=NO_HARDWARE_PROFILE",
+                `state=${this.hardwareState}`,
+            );
             throw new Error("未匹配到受支持的硬件配置，无法执行指令");
         }
         const profile = this.matchedProfile;
@@ -414,10 +497,23 @@ export class LocalRelayProvider implements RelayProvider {
         this.emitHardwareStatus();
     try {
         const bytes = this.commandBytes(command.action, profile);
+        hardwareLog.info(
+            "write start",
+            `action=${command.action} bytes=`
+            + Array.from(bytes)
+                .map((byte) => byte.toString(16).padStart(2, "0").toUpperCase())
+                .join(" ")
+            + ` previousState=${command.previousState}`
+            + ` profile=${profile.name}`,
+        );
       await this.adapter.send(bytes);
       this.commandedState = command.action;
       this.commandStatus = "SUCCESS";
         this.emitHardwareStatus();
+        hardwareLog.info(
+            "write success",
+            `action=${command.action} relayState=${this.commandedState}`,
+        );
       return {
         commandId: command.eventId,
         deviceId: command.deviceId,
@@ -430,6 +526,14 @@ export class LocalRelayProvider implements RelayProvider {
     } catch (error) {
       this.commandStatus = "FAILED";
         this.emitHardwareStatus();
+        // 写入失败可能意味着设备在写入过程中被物理拔出：
+        // 立即与适配器真实状态对齐，避免 UI 继续停留在 CONNECTED。
+        this.recomputeHardwareState(this.adapter.getStatus());
+        hardwareLog.error(
+            "write failure",
+            `action=${command.action} reason=${errorMessage(error)} `
+            + `relayState=${this.commandedState}（保持原值，不伪造成功）`,
+        );
       throw error;
     } finally {
         this.commandExecuting = false;

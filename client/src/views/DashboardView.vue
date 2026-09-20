@@ -76,7 +76,9 @@ function applyLocalResult(result: RelayExecutionResult): void {
     relayStore.applyEvent(result.cloudEvent);
     return;
   }
-  if (result.commandStatus === "SUCCESS") {
+  // 本地控制成功但未关联云端设备时，只更新本地硬件状态，
+  // 不去伪造云端 relay_state。
+  if (result.commandStatus === "SUCCESS" && result.deviceId) {
     relayStore.applyLocalCommand(
       result.deviceId,
       result.channel,

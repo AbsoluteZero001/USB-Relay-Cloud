@@ -64,6 +64,8 @@ export function toAndroidPortInfo(
     driverName,
     supported: device.supported,
     hasPermission: device.hasPermission,
+    // UsbManager.getDeviceList() 只会列出当前在位的设备
+    physicallyPresent: true,
   };
 }
 

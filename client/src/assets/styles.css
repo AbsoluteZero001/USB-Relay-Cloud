@@ -1289,8 +1289,9 @@ button:disabled {
 .relay-switch-row {
     display: flex;
     align-items: center;
-    gap: 1rem;
-    margin: 20px 0;
+    gap: 1.25rem;
+    margin: 24px 0 12px;
+    flex-wrap: wrap;
 }
 
 .relay-switch {
@@ -1300,56 +1301,137 @@ button:disabled {
     background: transparent;
     cursor: pointer;
     padding: 0;
+    -webkit-tap-highlight-color: transparent;
 }
 
 .relay-switch.disabled {
     cursor: not-allowed;
-    opacity: 0.5;
 }
 
 .relay-switch-track {
-    width: 80px;
-    height: 40px;
+    display: block;
+    width: 128px;
+    height: 62px;
     border-radius: 999px;
-    background: var(--danger, #b43b3b);
+    background: linear-gradient(135deg, #dc2626 0%, #ef4444 100%);
     position: relative;
-    transition: background 0.2s ease;
+    transition: background 0.25s ease, box-shadow 0.25s ease;
     flex-shrink: 0;
+    box-shadow: inset 0 1px 3px rgba(15, 23, 42, 0.2);
 }
 
-.relay-switch.on .relay-switch-track {
-    background: var(--success, #157f55);
+.relay-switch.is-on .relay-switch-track {
+    background: linear-gradient(135deg, #059669 0%, #22c55e 100%);
 }
 
-.relay-switch.disabled .relay-switch-track {
-    background: #c7ccd1;
+.relay-switch.is-unknown .relay-switch-track {
+    background: linear-gradient(135deg, #475569 0%, #94a3b8 100%);
+}
+
+.relay-switch.is-offline .relay-switch-track {
+    background: #cbd5e1;
+    box-shadow: none;
+}
+
+.relay-switch.busy .relay-switch-track {
+    opacity: 0.85;
 }
 
 .relay-switch-thumb {
     position: absolute;
-    top: 4px;
-    left: 4px;
-    width: 32px;
-    height: 32px;
+    top: 7px;
+    left: 7px;
+    display: grid;
+    place-items: center;
+    width: 48px;
+    height: 48px;
     border-radius: 50%;
     background: #fff;
-    box-shadow: 0 2px 4px rgba(0, 0, 0, 0.3);
-    transition: transform 0.2s ease;
+    color: #334155;
+    box-shadow: 0 3px 8px rgba(15, 23, 42, 0.3);
+    transition: transform 0.25s ease, color 0.2s ease;
 }
 
-.relay-switch.on .relay-switch-thumb {
-    transform: translateX(40px);
+.relay-switch.is-on .relay-switch-thumb {
+    transform: translateX(66px);
+    color: #059669;
+}
+
+.relay-switch.is-off .relay-switch-thumb {
+    color: #dc2626;
+}
+
+.relay-switch.is-offline .relay-switch-thumb {
+    color: #94a3b8;
+}
+
+.relay-switch-label-group {
+    display: grid;
+    gap: 2px;
 }
 
 .relay-switch-label {
-    font-size: 28px;
+    font-size: 34px;
     font-weight: 800;
+    line-height: 1;
     color: var(--muted);
-    min-width: 50px;
+    min-width: 96px;
 }
 
-.relay-switch-label.on {
+.relay-switch-label.is-on {
     color: var(--success);
+}
+
+.relay-switch-label.is-off {
+    color: var(--danger);
+}
+
+.relay-switch-label.is-unknown {
+    color: #64748b;
+}
+
+.relay-switch-label.is-offline {
+    color: #9aa6b2;
+}
+
+.relay-switch-sublabel {
+    font-size: 13px;
+    font-weight: 600;
+    color: var(--muted);
+}
+
+/* 指令状态大字与图标同步使用 ON / OFF / UNKNOWN / 未连接 配色 */
+.command-icon.is-on {
+    color: var(--success);
+    background: var(--success-soft);
+}
+
+.command-icon.is-off {
+    color: var(--danger);
+    background: var(--danger-soft);
+}
+
+.command-icon.is-unknown {
+    color: #475569;
+    background: #e8eef0;
+}
+
+.command-icon.is-offline {
+    color: #9aa6b2;
+    background: #eef2f5;
+}
+
+.command-state strong.is-on {
+    color: var(--success);
+}
+
+.command-state strong.is-off {
+    color: var(--danger);
+}
+
+.command-state strong.is-unknown,
+.command-state strong.is-offline {
+    color: var(--muted);
 }
 
 /* 硬件信息卡 */
@@ -1570,22 +1652,23 @@ button:disabled {
     }
 
     .relay-switch-track {
-        width: 64px;
-        height: 32px;
+        width: 116px;
+        height: 58px;
     }
 
     .relay-switch-thumb {
-        width: 24px;
-        height: 24px;
-        top: 4px;
-        left: 4px;
+        width: 46px;
+        height: 46px;
+        top: 6px;
+        left: 6px;
     }
 
-    .relay-switch.on .relay-switch-thumb {
-        transform: translateX(32px);
+    .relay-switch.is-on .relay-switch-thumb {
+        transform: translateX(58px);
     }
 
     .relay-switch-label {
-        font-size: 22px;
+        font-size: 30px;
+        min-width: 84px;
     }
 }

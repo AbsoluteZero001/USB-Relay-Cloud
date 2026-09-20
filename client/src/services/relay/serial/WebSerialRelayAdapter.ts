@@ -21,12 +21,52 @@ function looksLikeCh340(vendorId: number | undefined): boolean {
   return vendorId === CH340_VENDOR_ID;
 }
 
+function isSerialPort(value: unknown): value is SerialPort {
+  return !!value
+    && typeof value === "object"
+    && typeof (value as SerialPort).getInfo === "function";
+}
+
+/**
+ * 从 SerialConnectionEvent 中取出真正被插拔的 SerialPort。
+ *
+ * 关键：connect / disconnect 事件的目标是 `navigator.serial` 本身，
+ * 被插拔的端口在 `event.port`。历史 Bug 用 `event.target` 当 SerialPort，
+ * 导致永远匹配不上 activePort，物理拔出后仍然保持 CONNECTED。
+ */
+function readEventPort(event: Event): SerialPort | null {
+  const fromEvent = (event as unknown as {port?: unknown}).port;
+  if (isSerialPort(fromEvent)) {
+    return fromEvent;
+  }
+  if (isSerialPort(event.target)) {
+    return event.target;
+  }
+  return null;
+}
+
+function isDeviceLossError(error: unknown): boolean {
+  if (error instanceof DOMException) {
+    return error.name === "InvalidStateError"
+      || error.name === "NetworkError"
+      || error.name === "NotFoundError"
+      || error.name === "NotReadableError";
+  }
+  const message = formatHardwareError(error).toLowerCase();
+  return message.includes("disconnect")
+    || message.includes("device")
+    || message.includes("network")
+    || message.includes("not found")
+    || message.includes("closed");
+}
+
 /**
  * 把浏览器已授权串口描述成 SerialPortInfo。
  *
- * 重要前提：Web Serial 的 `getPorts()` **只能**返回用户此前通过
- * `requestPort()` 授权过的设备。它拿不到系统里全部串口，因此 Web 端
- * 必须区分「扫描已授权设备」与「选择新设备」两个动作。
+ * 前提：Web Serial 的 `getPorts()` 只返回用户此前授权过的设备，
+ * 而且**已授权的端口可能已经物理拔出**（Chrome 保留授权）。
+ * 因此 `getPorts()` 的结果只用于「可选设备列表」，
+ * 真实连接状态一律以 open / write / disconnect 事件为准。
  */
 export function describeWebSerialPort(
   portId: string,
@@ -50,7 +90,8 @@ export function describeWebSerialPort(
     serialNumber: null,
     isCurrent,
     driverName: isCh340 ? "CH340" : null,
-    supported: info.usbVendorId != null && info.usbProductId != null,
+    // Web Serial 只会把真实串口设备交给页面，VID/PID 缺失不影响连接
+    supported: true,
     hasPermission: true,
   };
 }
@@ -58,13 +99,20 @@ export function describeWebSerialPort(
 export class WebSerialRelayAdapter implements RequestableSerialAdapter {
   readonly name = "WebSerialRelayAdapter";
 
+  /** 当前正在使用的 SerialPort；物理拔出后必须置空 */
   private port: SerialPort | null = null;
+  /** 正在写入的 writer，断连时需要 releaseLock */
+  private activeWriter: WritableStreamDefaultWriter<Uint8Array> | null = null;
   private state: SerialStatus["state"] = "disconnected";
+  /** 是否处于「已 open 且未收到 disconnect」的物理连接状态 */
+  private physicalConnected = false;
   private baudRate = 9600;
   private errorCode: string | null = null;
   private errorDetail: string | null = null;
   private nextPortId = 1;
   private listenersRegistered = false;
+  /** 收到过 disconnect 事件、尚未重新插入的端口 */
+  private readonly absentPorts = new WeakSet<SerialPort>();
   private readonly portIds = new WeakMap<SerialPort, string>();
   private readonly knownPorts = new Map<string, SerialPort>();
   private readonly statusListeners = new Set<(status: SerialStatus) => void>();
@@ -77,6 +125,12 @@ export class WebSerialRelayAdapter implements RequestableSerialAdapter {
     return typeof navigator !== "undefined" && !!navigator.serial;
   }
 
+  isPhysicallyConnected(): boolean {
+    return this.physicalConnected
+      && this.state === "connected"
+      && !!this.port;
+  }
+
   async listPorts(): Promise<SerialPortInfo[]> {
     this.ensureSupported();
     const ports = await navigator.serial.getPorts();
@@ -84,7 +138,10 @@ export class WebSerialRelayAdapter implements RequestableSerialAdapter {
     const described = ports.map((port) => {
       const id = this.portIdFor(port);
       this.knownPorts.set(id, port);
-      return describeWebSerialPort(id, port, port === this.port);
+      return this.withPresence(
+        describeWebSerialPort(id, port, port === this.port),
+        port,
+      );
     });
     hardwareLog.info(
       `Web Serial 已授权设备数量：${described.length}`,
@@ -94,7 +151,7 @@ export class WebSerialRelayAdapter implements RequestableSerialAdapter {
               `${item.port} VID=${item.vendorId ?? "未知"} `
               + `PID=${item.productId ?? "未知"}`)
             .join("\n")
-        : "没有已授权串口；请点击「选择串口设备」触发浏览器授权窗口",
+        : "没有已授权串口；请点击「选择新串口设备」触发浏览器授权窗口",
     );
     return described;
   }
@@ -109,6 +166,7 @@ export class WebSerialRelayAdapter implements RequestableSerialAdapter {
     hardwareLog.info("打开浏览器串口选择窗口");
     try {
       const port = await navigator.serial.requestPort();
+      this.absentPorts.delete(port);
       const id = this.portIdFor(port);
       this.knownPorts.set(id, port);
       const info = describeWebSerialPort(id, port, port === this.port);
@@ -141,7 +199,14 @@ export class WebSerialRelayAdapter implements RequestableSerialAdapter {
     if (options.stopBits !== 1 && options.stopBits !== 2) {
       throw new Error("Web Serial 仅支持 1 或 2 停止位");
     }
+    // 切换到其他端口前，先释放上一个端口
+    if (this.port && this.port !== port) {
+      await this.releaseResources();
+    }
     this.state = "connecting";
+    this.physicalConnected = false;
+    this.errorCode = null;
+    this.errorDetail = null;
     this.emitStatus();
     try {
       await port.open({
@@ -155,7 +220,10 @@ export class WebSerialRelayAdapter implements RequestableSerialAdapter {
         flowControl:
           options.flowControl === "hardware" ? "hardware" : undefined,
       });
+      // 只有 open() 真正返回成功才进入 CONNECTED
       this.port = port;
+      this.physicalConnected = true;
+      this.absentPorts.delete(port);
       this.baudRate = options.baudRate;
       this.state = "connected";
       this.errorCode = null;
@@ -168,10 +236,18 @@ export class WebSerialRelayAdapter implements RequestableSerialAdapter {
       );
       this.emitStatus();
     } catch (error) {
+      const detail = formatHardwareError(error);
+      this.port = null;
+      this.physicalConnected = false;
       this.state = "error";
-      this.errorCode = "SERIAL_OPEN_FAILED";
-      this.errorDetail = formatHardwareError(error);
-      hardwareLog.error("串口打开失败", this.errorDetail);
+      this.errorCode = isDeviceLossError(error)
+        ? "SERIAL_DEVICE_DISCONNECTED"
+        : "SERIAL_OPEN_FAILED";
+      this.errorDetail = detail;
+      hardwareLog.error(
+        "串口打开失败（端口可能已被物理拔出）",
+        detail,
+      );
       this.emitStatus();
       throw error;
     }
@@ -179,55 +255,78 @@ export class WebSerialRelayAdapter implements RequestableSerialAdapter {
 
   async disconnect(): Promise<void> {
     const port = this.port;
+    const writer = this.activeWriter;
     this.port = null;
-    if (port) {
-      try {
-        await port.close();
-      } catch {
-        // Best effort: the device may already be detached.
-      }
-    }
+    this.activeWriter = null;
+    this.physicalConnected = false;
+    await this.cleanupResources(port, writer);
     this.state = "disconnected";
     this.errorCode = null;
     this.errorDetail = null;
+    hardwareLog.info("串口已断开（用户主动断开）");
     this.emitStatus();
   }
 
   async send(data: Uint8Array): Promise<void> {
-    if (!this.port || this.state !== "connected") {
+    const port = this.port;
+    // 第二层保护：即使 UI 状态还没更新，也必须在写之前确认物理连接
+    if (!port || this.state !== "connected" || !this.physicalConnected) {
+      if (this.errorCode === "SERIAL_DEVICE_DISCONNECTED") {
+        throw new Error("串口设备已断开，指令未发送。");
+      }
       throw new Error("Web Serial 串口尚未连接");
     }
-    const writer = this.port.writable?.getWriter();
-    if (!writer) {
-      throw new Error("串口不可写");
+    const writable = port.writable;
+    if (!writable) {
+      this.markPhysicalDisconnect(port, "串口已关闭（writable = null）");
+      throw new Error("串口设备已断开，指令未发送。");
     }
+    let writer: WritableStreamDefaultWriter<Uint8Array>;
+    try {
+      writer = writable.getWriter();
+    } catch (error) {
+      this.markPhysicalDisconnect(port, formatHardwareError(error));
+      throw new Error("串口设备已断开，指令未发送。");
+    }
+    this.activeWriter = writer;
+    const hex = Array.from(data)
+      .map((byte) => byte.toString(16).padStart(2, "0").toUpperCase())
+      .join(" ");
     try {
       await writer.write(data);
-      hardwareLog.info(
-        "串口写入成功",
-        Array.from(data)
-          .map((byte) => byte.toString(16).padStart(2, "0").toUpperCase())
-          .join(" "),
-      );
+      hardwareLog.info("串口写入成功", hex);
     } catch (error) {
-      hardwareLog.error("串口写入失败", formatHardwareError(error));
-      this.errorCode = "SERIAL_WRITE_FAILED";
-      this.errorDetail = formatHardwareError(error);
+      const detail = formatHardwareError(error);
+      if (isDeviceLossError(error)) {
+        this.markPhysicalDisconnect(port, detail);
+        throw new Error(`串口设备已断开，指令未发送。(${detail})`);
+      }
       this.state = "error";
+      this.errorCode = "SERIAL_WRITE_FAILED";
+      this.errorDetail = detail;
+      hardwareLog.error("串口写入失败", `${hex} · ${detail}`);
       this.emitStatus();
-      throw error;
+      throw new Error(`串口写入失败：${detail}`);
     } finally {
-      writer.releaseLock();
+      if (this.activeWriter === writer) {
+        this.activeWriter = null;
+      }
+      try {
+        writer.releaseLock();
+      } catch {
+        // port 已断开时 releaseLock 可能抛错，忽略即可
+      }
     }
   }
 
   getStatus(): SerialStatus {
+    const connected = this.isPhysicallyConnected();
     return {
       state: this.state,
-      port: this.port ? this.portIdFor(this.port) : null,
-      device: this.port ? "Web Serial" : null,
+      port: connected ? this.portIdFor(this.port as SerialPort) : null,
+      device: connected ? "Web Serial" : null,
       baudRate: this.baudRate,
-      connected: this.state === "connected",
+      connected,
       errorCode: this.errorCode,
       detail: this.errorDetail,
     };
@@ -256,12 +355,24 @@ export class WebSerialRelayAdapter implements RequestableSerialAdapter {
     this.listenersRegistered = true;
     try {
       navigator.serial.addEventListener("connect", (event) => {
-        const port = event.target as SerialPort;
-        void this.notifyDeviceChange("attached", port);
+        const port = readEventPort(event);
+        if (port) {
+          // 重新插入：清除「已拔出」标记，等待用户重新连接
+          this.absentPorts.delete(port);
+        }
+        hardwareLog.info(
+          "检测到 Web Serial 设备插入",
+          port ? this.describeForLog(port) : "浏览器未提供 event.port",
+        );
+        void this.emitDeviceChange("attached", port);
       });
       navigator.serial.addEventListener("disconnect", (event) => {
-        const port = event.target as SerialPort;
-        void this.notifyDeviceChange("detached", port);
+        const port = readEventPort(event);
+        hardwareLog.warn(
+          "检测到 Web Serial 设备拔出",
+          port ? this.describeForLog(port) : "浏览器未提供 event.port",
+        );
+        this.handlePhysicalDisconnect(port);
       });
     } catch (error) {
       this.listenersRegistered = false;
@@ -272,27 +383,117 @@ export class WebSerialRelayAdapter implements RequestableSerialAdapter {
     }
   }
 
-  private async notifyDeviceChange(
-    type: SerialDeviceChange["type"],
-    port: SerialPort,
-  ): Promise<void> {
-    const id = this.portIdFor(port);
-    let info: SerialPortInfo | null = null;
-    try {
-      info = describeWebSerialPort(id, port, port === this.port);
-    } catch {
-      info = null;
+  /**
+   * 物理拔出处理。
+   *
+   * - port 为 null（浏览器没给 event.port）时按「当前端口可能已断开」保守处理
+   * - 拔出的不是当前端口时只刷新列表，不影响当前连接
+   */
+  private handlePhysicalDisconnect(port: SerialPort | null): void {
+    if (port && this.port && port !== this.port) {
+      void this.emitDeviceChange("detached", port);
+      return;
     }
-    if (type === "detached" && this.port === port) {
-      this.port = null;
-      this.state = "error";
-      this.errorCode = "SERIAL_DEVICE_DISCONNECTED";
-      this.errorDetail = "USB 串口设备已拔出";
-      hardwareLog.warn("Web Serial 设备已拔出", info?.device ?? id);
-      this.emitStatus();
+    this.markPhysicalDisconnect(
+      this.port,
+      "USB 串口设备已拔出",
+      port ?? this.port,
+    );
+  }
+
+  /**
+   * 统一断连流程：清状态 → 清理 writer / port → 通知上层。
+   * 允许 port.close() 抛错（设备已经不在），必须捕获。
+   */
+  private markPhysicalDisconnect(
+    activePort: SerialPort | null,
+    detail: string,
+    reportedPort: SerialPort | null = activePort,
+  ): void {
+    const writer = this.activeWriter;
+    this.activeWriter = null;
+    this.port = null;
+    this.physicalConnected = false;
+    if (reportedPort) {
+      this.absentPorts.add(reportedPort);
+    }
+    this.state = "error";
+    this.errorCode = "SERIAL_DEVICE_DISCONNECTED";
+    this.errorDetail = "USB 串口设备已拔出";
+    hardwareLog.error(
+      "canControl=false reason=SERIAL_DISCONNECTED",
+      `${detail} · 已清理 activePort / writer，relayState 保持 UNKNOWN`,
+    );
+    void this.cleanupResources(activePort, writer);
+    this.emitStatus();
+    void this.emitDeviceChange("detached", reportedPort);
+  }
+
+  private async cleanupResources(
+    port: SerialPort | null,
+    writer: WritableStreamDefaultWriter<Uint8Array> | null,
+  ): Promise<void> {
+    if (writer) {
+      try {
+        await writer.abort("端口已断开");
+      } catch {
+        // writer 可能已经随端口一起失效
+      }
+      try {
+        writer.releaseLock();
+      } catch {
+        // 已释放或端口已关闭时忽略
+      }
+    }
+    if (port) {
+      try {
+        await port.close();
+      } catch {
+        // 物理拔出后 close() 会抛错，属于预期情况
+      }
+    }
+  }
+
+  private async releaseResources(): Promise<void> {
+    const port = this.port;
+    const writer = this.activeWriter;
+    this.port = null;
+    this.activeWriter = null;
+    this.physicalConnected = false;
+    await this.cleanupResources(port, writer);
+  }
+
+  private async emitDeviceChange(
+    type: SerialDeviceChange["type"],
+    port: SerialPort | null,
+  ): Promise<void> {
+    let info: SerialPortInfo | null = null;
+    if (port) {
+      try {
+        info = this.withPresence(
+          describeWebSerialPort(
+            this.portIdFor(port),
+            port,
+            port === this.port,
+          ),
+          port,
+        );
+      } catch {
+        info = null;
+      }
     }
     for (const listener of this.deviceChangeListeners) {
       listener({type, port: info});
+    }
+  }
+
+  private describeForLog(port: SerialPort): string {
+    try {
+      const info = describeWebSerialPort(this.portIdFor(port), port);
+      return `VID=${info.vendorId ?? "未知"} PID=${info.productId ?? "未知"} `
+        + `当前连接=${port === this.port ? "yes" : "no"}`;
+    } catch {
+      return "无法读取端口信息";
     }
   }
 
@@ -302,6 +503,20 @@ export class WebSerialRelayAdapter implements RequestableSerialAdapter {
     const id = `serial-${this.nextPortId++}`;
     this.portIds.set(port, id);
     return id;
+  }
+
+  /** 标注物理在位状态：已拔出 / 当前已连接 / 未知。 */
+  private withPresence(
+    info: SerialPortInfo,
+    port: SerialPort,
+  ): SerialPortInfo {
+    if (this.absentPorts.has(port)) {
+      return {...info, physicallyPresent: false};
+    }
+    if (port === this.port && this.physicalConnected) {
+      return {...info, physicallyPresent: true};
+    }
+    return {...info, physicallyPresent: null};
   }
 
   private async resolvePort(portId: string): Promise<SerialPort | null> {

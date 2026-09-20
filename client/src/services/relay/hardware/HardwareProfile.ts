@@ -81,6 +81,59 @@ export const LCUS1_CH340_PROFILE: RelayHardwareProfile = {
 export const SUPPORTED_PROFILES: RelayHardwareProfile[] = [LCUS1_CH340_PROFILE];
 
 /**
+ * 通用 USB 串口继电器配置（回退方案）。
+ *
+ * 使用场景：平台已经识别出可用串口（Android 有 usb-serial 驱动 /
+ * Web Serial 已由用户授权），但 VID/PID 不是已知的 LCUS-1 组合，
+ * 例如 CH341 变体、克隆板、或浏览器未暴露 PID 的情况。
+ *
+ * 串口参数与指令字节与 LCUS-1 完全一致；只有型号识别不同，
+ * UI 会显示这个通用名称，不会谎称识别到了 LCUS-1。
+ */
+export const GENERIC_SERIAL_RELAY_PROFILE: RelayHardwareProfile = {
+    id: "generic-serial-relay",
+    name: "通用 USB 串口继电器（9600 8N1）",
+    usbChip: "USB-Serial",
+    vendorIds: [],
+    productIds: [],
+    driverNames: [],
+    baudRate: 9600,
+    dataBits: 8,
+    stopBits: 1,
+    parity: "none",
+    flowControl: "none",
+    channels: 1,
+    protocol: "LCUS1",
+    onCommand: new Uint8Array([0xa0, 0x01, 0x01, 0xa2]),
+    offCommand: new Uint8Array([0xa0, 0x01, 0x00, 0xa1]),
+    supportsStateReadback: false,
+};
+
+export interface HardwareProfileMatch {
+    profile: RelayHardwareProfile;
+    /** true 表示未识别出具体型号，使用通用配置 */
+    generic: boolean;
+}
+
+/**
+ * 先按已知型号精确匹配，匹配不到时对「平台已识别为可用串口」的端口
+ * 回退到通用配置。没有任何串口驱动的设备（supported=false）仍返回 null，
+ * 避免对未知 USB 设备乱发指令。
+ */
+export function matchHardwareProfileOrGeneric(
+    port: SerialPortInfo,
+): HardwareProfileMatch | null {
+    const exact = matchHardwareProfile(port);
+    if (exact) {
+        return {profile: exact, generic: false};
+    }
+    if (port.supported === true) {
+        return {profile: GENERIC_SERIAL_RELAY_PROFILE, generic: true};
+    }
+    return null;
+}
+
+/**
  * 将 USB vendorId / productId 统一规范化为大写 4 位十六进制字符串（如 "1A86"）。
  *
  * 接受以下输入：
@@ -174,8 +227,11 @@ export function normalizeDriverName(value: unknown): string | null {
  */
 export function describeUnsupportedPort(port: SerialPortInfo): string {
     const driver = port.driverName ?? "未知";
-    if (port.supported === false || port.driverName == null) {
+    if (port.supported === false) {
         return "检测到 USB 设备，但未找到兼容串口驱动";
+    }
+    if (port.driverName == null) {
+        return "已授权的串口设备未提供 VID/PID 信息，可直接尝试连接";
     }
     return `检测到串口设备（驱动 ${driver}），但未匹配到 LCUS-1 硬件配置`;
 }

@@ -7,7 +7,7 @@ import {relayService} from "@/services/relay";
 import {
   describeUnsupportedPort,
   hardwareStateLabel,
-  matchHardwareProfile,
+  matchHardwareProfileOrGeneric,
   type HardwareStatus,
   type RelayHardwareProfile,
 } from "@/services/relay/hardware";
@@ -22,6 +22,8 @@ const props = defineProps<{
 interface PortEntry {
   port: SerialPortInfo;
   profile: RelayHardwareProfile | null;
+  /** true = 未识别出具体型号，使用通用串口配置 */
+  generic: boolean;
 }
 
 const platform = relayService.getPlatform();
@@ -46,10 +48,14 @@ const stateLabel = computed(() => hardwareStateLabel(status.value.state));
  * USB 插入 / 拔出后 Provider 会自动重新扫描并推送新状态，UI 无需手动刷新。
  */
 const portEntries = computed<PortEntry[]>(() =>
-  status.value.lastPorts.map((port) => ({
-    port,
-    profile: matchHardwareProfile(port),
-  })),
+  status.value.lastPorts.map((port) => {
+    const match = matchHardwareProfileOrGeneric(port);
+    return {
+      port,
+      profile: match?.profile ?? null,
+      generic: match?.generic ?? false,
+    };
+  }),
 );
 
 const supportedEntries = computed(() =>
@@ -68,6 +74,10 @@ const selectedNeedsPermission = computed(
   () => selectedEntry.value?.port.hasPermission === false,
 );
 
+const selectedPortAbsent = computed(
+  () => selectedEntry.value?.port.physicallyPresent === false,
+);
+
 const isWebRuntime = computed(() => runtime === "web");
 const webSerialSupported = computed(
   () => typeof navigator !== "undefined" && "serial" in navigator,
@@ -78,10 +88,10 @@ const unsupportedHint = computed(() => {
   if (portEntries.value.length === 0) {
     if (isWebRuntime.value) {
       return webSerialSupported.value
-        ? "没有已授权串口设备。首次使用请点击「选择串口设备」，"
-          + "在浏览器原生窗口中选择 CH340。"
-        : "当前浏览器不支持 Web Serial，请使用最新版 Chrome / Edge，"
-          + "或者使用 Android / Electron 客户端连接本地硬件。";
+        ? "尚未授权串口设备，请点击「选择新串口设备」。"
+          + "（浏览器安全模型：首次必须由用户点击并在原生窗口中选择 CH340）"
+        : "当前浏览器不支持 Web Serial。请使用最新版桌面 Chrome / Edge，"
+          + "或使用 Android / Electron 客户端。";
     }
     return "未检测到 USB 设备。请确认 OTG 已连接、LCUS-1 + CH340 已插入。";
   }
@@ -90,6 +100,9 @@ const unsupportedHint = computed(() => {
     return first
       ? `${describeUnsupportedPort(first.port)}（需要 CH340 + LCUS-1）`
       : status.value.errorDetail;
+  }
+  if (supportedEntries.value.some((entry) => entry.generic)) {
+    return "未识别出 LCUS-1 型号，将按 9600 8N1 + LCUS-1 指令使用通用串口配置。";
   }
   return null;
 });
@@ -178,6 +191,8 @@ async function pickPort(): Promise<void> {
   error.value = null;
   notice.value = null;
   try {
+    // 必须在用户点击的同步调用栈里进入 navigator.serial.requestPort()：
+    // 从这里到真正的 requestPort() 之间不能有任何 await / setTimeout。
     const port = await relayService.requestLocalPort();
     selectedPort.value = port.port;
     await relayService.scanAndMatch();
@@ -281,7 +296,12 @@ onBeforeUnmount(() => {
             · VID:{{ entry.port.vendorId ?? "—" }}/PID:{{ entry.port.productId ?? "—" }}
             · {{ driverLabel(entry.port) }}
             · {{ permissionLabel(entry.port) }}
-            {{ entry.profile ? " · 受支持" : "" }}
+            {{
+              entry.profile
+                  ? (entry.generic ? " · 通用配置" : " · 受支持")
+                  : ""
+            }}
+            {{ entry.port.physicallyPresent === false ? " · 已拔出" : "" }}
           </option>
         </select>
       </label>
@@ -333,31 +353,42 @@ onBeforeUnmount(() => {
 
       <div class="button-row button-row-large">
         <button
+            v-if="!connected && isWebRuntime"
+            class="button button-primary button-large"
+            type="button"
+            :disabled="busy || !webSerialSupported"
+            @click="pickPort"
+        >
+          <Usb :size="18"/>
+          选择新串口设备
+        </button>
+        <button
             class="button button-secondary button-large"
             type="button"
             :disabled="busy"
             @click="scan"
         >
           <RefreshCw :size="18" :class="{spin: busy}"/>
-          {{ connected ? "重新扫描" : (isWebRuntime ? "扫描已授权设备" : "扫描 USB 设备") }}
-        </button>
-        <button
-            v-if="!connected && isWebRuntime"
-            class="button button-secondary button-large"
-            type="button"
-            :disabled="busy || !webSerialSupported"
-            @click="pickPort"
-        >
-          <Usb :size="18"/>
-          选择串口设备
+          {{
+            connected
+                ? "重新扫描"
+                : isWebRuntime
+                    ? "刷新已授权设备"
+                    : "扫描 USB 设备"
+          }}
         </button>
         <button
             v-if="!connected"
             class="button button-primary button-large"
             type="button"
-            :disabled="busy || !selectedPort || (selectedEntry?.port.supported === false)"
+            :disabled="
+              busy
+                || !selectedPort
+                || selectedEntry?.port.supported === false
+                || selectedPortAbsent
+            "
             @click="connect"
-        >
+          >
           <PlugZap :size="18"/>
           {{ selectedNeedsPermission ? "授权并连接" : "连接" }}
         </button>
@@ -374,6 +405,15 @@ onBeforeUnmount(() => {
       </div>
 
       <p v-if="unsupportedHint" class="inline-note">{{ unsupportedHint }}</p>
+      <p v-if="selectedPortAbsent" class="inline-note error">
+        该设备已物理拔出，请重新插入后再点击「连接」。
+      </p>
+      <p
+          v-if="status.errorCode === 'SERIAL_DEVICE_DISCONNECTED'"
+          class="inline-note error"
+      >
+        USB 设备已拔出，请重新插入设备并连接。
+      </p>
       <p v-if="status.state === 'PERMISSION_REQUIRED'" class="inline-note">
         需要 USB 权限，请在系统授权窗口中允许后重试。
       </p>

@@ -148,7 +148,11 @@ export class RelayService {
   }
 
     scanAndMatch(): Promise<
-        { port: import("./serial/types").SerialPortInfo; profile: RelayHardwareProfile | null }[]
+        {
+            port: import("./serial/types").SerialPortInfo;
+            profile: RelayHardwareProfile | null;
+            generic: boolean;
+        }[]
     > {
         return this.localProvider.scanAndMatch();
     }
@@ -228,7 +232,7 @@ export class RelayService {
      *   本地断开不会生成假的 OFF，也不会修改云端最后指令。
      */
   async executeLocalCommand(
-    deviceId: string,
+    deviceId: string | null,
     channel: number,
     action: RelayAction,
   ): Promise<RelayExecutionResult> {
@@ -267,17 +271,69 @@ export class RelayService {
       // Phase 8：先入队（持久化），再立即 POST；
       // 200 → 出队；失败 → 保留在队列，等重连/启动重试。
       // 幂等：服务端 relay_event.event_id UNIQUE 保证重复 POST 安全。
-        // FAILED 事件也上传，便于日志记录；服务端只对 SUCCESS 更新 relay_state。
+        // 只有「真正尝试过写串口」的指令才上传事件：
+        // 本地没有写入（串口未连接 / 设备已被拔出）时不上传，
+        // 否则会出现「没有硬件却产生控制日志与广播」的假记录。
+        if (!localWriteSucceeded && !this.localProvider.isHardwareConnected()) {
+            hardwareLog.warn(
+                "云端同步跳过",
+                `reason=SERIAL_NOT_CONNECTED action=${action} `
+                + "本地未写入任何字节，未上传 relay_event",
+            );
+            return {
+                commandId: eventId,
+                deviceId,
+                channel,
+                commandedState: previousState,
+                commandStatus,
+                hardwareState: "UNKNOWN",
+                localWriteSucceeded: false,
+                cloudSyncStatus: "NOT_REQUIRED",
+                cloudSyncMessage:
+                    cloudSyncMessage ?? "本地串口未连接，指令未发送（未上传云端）",
+                cloudEvent: null,
+            };
+        }
+
+        // currentState 表示「本次尝试的目标状态」，必须与 action 一致：
+        // 服务端会校验二者相同，但只对 commandStatus=SUCCESS 更新 relay_state，
+        // 因此 FAILED 事件只是审计记录，不会伪造硬件状态。
       const payload: RelayEventCreatePayload = {
           eventId,
           channel,
           action,
           previousState,
-          currentState: localWriteSucceeded ? action : previousState,
+          currentState: action,
           commandStatus,
           source,
           clientId: callerId,
       };
+
+      // 未关联云端设备：本地串口写入已经完成，直接返回。
+      // 本地硬件控制与 Cloud Sync 是两层，缺少云端 deviceId
+      // 绝不能阻止用户操作继电器。
+      if (!deviceId) {
+          hardwareLog.info(
+              "云端同步跳过",
+              `reason=NO_CLOUD_DEVICE action=${action} `
+              + `localWriteSucceeded=${localWriteSucceeded}`,
+          );
+          return {
+              commandId: eventId,
+              deviceId: null,
+              channel,
+              commandedState: localWriteSucceeded ? action : previousState,
+              commandStatus,
+              hardwareState: "UNKNOWN",
+              localWriteSucceeded,
+              cloudSyncStatus: "NOT_REQUIRED",
+              cloudSyncMessage: localWriteSucceeded
+                  ? "本地控制已完成，未关联云端设备（未上传）"
+                  : cloudSyncMessage,
+              cloudEvent: null,
+          };
+      }
+
       this.eventOutbox.enqueue(deviceId, payload);
 
       let cloudSyncStatus: CloudSyncStatus = "FAILED";

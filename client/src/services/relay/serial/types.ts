@@ -43,6 +43,16 @@ export interface SerialPortInfo {
    * false 时 UI 应提供「授权并连接」。
    */
   hasPermission?: boolean | null;
+  /**
+   * 物理是否还在位。
+   *
+   * Web Serial 的 getPorts() 会一直返回「已授权」的端口，**即使设备已经拔出**，
+   * 因此必须单独记录物理在位状态：
+   * - true  当前可打开
+   * - false 收到过 disconnect 事件，设备已拔出（重新插入的 connect 事件会清除）
+   * - null / undefined 平台无法判定（例如 Android 的 deviceList 只会列出在位的设备）
+   */
+  physicallyPresent?: boolean | null;
 }
 
 /** USB 设备插拔变化，用于 UI 自动刷新与串口关闭。 */

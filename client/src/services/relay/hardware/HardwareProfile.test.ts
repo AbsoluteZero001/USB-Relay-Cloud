@@ -2,8 +2,10 @@ import {describe, expect, it} from "vitest";
 
 import {
     describeUnsupportedPort,
+    GENERIC_SERIAL_RELAY_PROFILE,
     LCUS1_CH340_PROFILE,
     matchHardwareProfile,
+    matchHardwareProfileOrGeneric,
     normalizeUsbId,
 } from "./HardwareProfile";
 import type {SerialPortInfo} from "../serial/types";
@@ -121,5 +123,48 @@ describe("matchHardwareProfile driver fallback", () => {
         unsupportedDriver.supported = true;
         expect(describeUnsupportedPort(unsupportedDriver))
             .toBe("检测到串口设备（驱动 CP210x），但未匹配到 LCUS-1 硬件配置");
+    });
+});
+
+describe("matchHardwareProfileOrGeneric", () => {
+    it("已知 CH340 组合仍返回精确配置（generic=false）", () => {
+        const p = port("1A86", "7523");
+        p.driverName = "CH340";
+        p.supported = true;
+
+        const match = matchHardwareProfileOrGeneric(p);
+
+        expect(match?.profile).toBe(LCUS1_CH340_PROFILE);
+        expect(match?.generic).toBe(false);
+    });
+
+    it("平台已识别为可用串口但型号未知时回退通用配置", () => {
+        const p = port("10C4", "EA60");
+        p.driverName = "CP210x";
+        p.supported = true;
+
+        const match = matchHardwareProfileOrGeneric(p);
+
+        expect(match?.profile).toBe(GENERIC_SERIAL_RELAY_PROFILE);
+        expect(match?.generic).toBe(true);
+    });
+
+    it("Web Serial 未暴露 VID/PID 时也能使用通用配置", () => {
+        const p = port(null, null);
+        p.driverName = null;
+        p.supported = true;
+
+        const match = matchHardwareProfileOrGeneric(p);
+
+        expect(match?.profile).toBe(GENERIC_SERIAL_RELAY_PROFILE);
+        expect(match?.generic).toBe(true);
+    });
+
+    it("没有串口驱动的 USB 设备仍然拒绝（返回 null）", () => {
+        const p = port("9999", "0001");
+        p.driverName = null;
+        p.supported = false;
+
+        expect(matchHardwareProfileOrGeneric(p)).toBeNull();
     });
 });

@@ -26,7 +26,7 @@ USB Relay Cloud 将本地 USB 继电器硬件接入云端，实现多客户端�
 | Backend Maven test           | 42/42 passed ✅        |
 | Backend Maven package        | BUILD SUCCESS ✅       |
 | Frontend typecheck           | passed ✅              |
-| Frontend Vitest              | 76/76 passed ✅        |
+| Frontend Vitest              | 125/125 passed ✅      |
 | Frontend Vite build          | passed ✅              |
 | Android cap sync             | passed ✅              |
 | Android Gradle assembleDebug | BUILD SUCCESSFUL ✅    |
@@ -361,7 +361,12 @@ Flyway migration 位于 `server/src/main/resources/db/migration/`。
 
 ## 12. 安全语义
 
-- **CONNECTED 才能控制**：USB 硬件未进入 CONNECTED 状态时，UI 开关 disabled
+- **本地串口 CONNECTED 才能控制**：`canControl = 本地串口已连接 && !写入中`；
+  与云端 device、relay_state、WebSocket、heartbeat 全部无关
+- **UNKNOWN 不等于禁止控制**：LCUS-1 无状态回读，刚连接时 `commandedState=UNKNOWN`，
+  此时开关依然可操作，第一次成功后本地状态才变为 ON / OFF
+- **云端不可用不影响本地控制**：未关联云端设备（`deviceId=null`）时只做本地 USB 写入，
+  云端事件标记为 `NOT_REQUIRED`；云端 POST 失败只影响日志同步，不回滚已成功的硬件动作
 - **无 optimistic update**：先执行本地 USB write，成功后才更新状态
 - **write success 才产生 SUCCESS**：串口写入失败 → FAILED，不更新 relay_state
 - **FAILED 不改变 relay_state**：失败事件只记录日志，不污染状态
@@ -411,6 +416,11 @@ Vue (LocalRelayPanel)
   PID 是变体也能匹配 LCUS-1 配置。
 - 权限流程：扫描 → 选择设备 → `connect()` → `UsbManager.hasPermission()` → 未授权则弹出系统
   授权对话框（`PendingIntent.FLAG_IMMUTABLE`）→ 授权成功后 `openDevice()`；权限不会被假定为永久有效。
+- 连接状态机明确区分 `NO_DEVICE` / `DETECTED` / `PERMISSION_REQUIRED` / `CONNECTING` /
+  `CONNECTED` / `DISCONNECTED` / `ERROR`。只有 `CONNECTED` 表示
+  `UsbDeviceConnection` 已获得、`SerialPort.open()` 成功、9600 8N1 已配置；
+  继电器开关的可用性只看它（`canControl = CONNECTED && !写入中`），
+  不要求账号里已注册云端设备、不要求 `relay_state` 存在、不要求 WebSocket 在线。
 - 插拔：Kotlin 侧注册 `ACTION_USB_DEVICE_ATTACHED` / `ACTION_USB_DEVICE_DETACHED`（`RECEIVER_NOT_EXPORTED`），
   插入自动重新扫描，拔出关闭串口并刷新 UI，不需要重启 App。
 - 调试日志：Android Logcat 统一 TAG `UsbRelay`；前端「本地硬件 → 调试信息」可查看同一批关键事件
@@ -425,13 +435,46 @@ Web Serial API 需要：
 - Chrome / Edge 浏览器
 - HTTPS secure context（或 `localhost` 开发例外）
 
-浏览器不允许网页枚举系统里全部串口：
+浏览器不允许网页枚举系统里全部串口，因此 Web 端把「发现设备」拆成两个明确动作：
 
-- 「扫描已授权设备」= `navigator.serial.getPorts()`，只能拿到用户此前授权过的端口
-- 「选择串口设备」= `navigator.serial.requestPort()`，必须在用户点击事件中调用，会弹出浏览器原生选择窗口
+- **选择新串口设备** = `navigator.serial.requestPort()`：必须在用户点击事件的同步调用栈里执行
+  （不能放在 `setTimeout`、Promise 延迟回调、WebSocket 回调、`mounted`、后台 scan 或自动重试里），
+  由浏览器弹出原生串口选择窗口，用户选中 CH340 后该设备才进入列表
+- **刷新已授权设备** = `navigator.serial.getPorts()`：只返回此前授权给当前 Origin 的串口，
+  不授权就是空列表（这是浏览器安全模型，不是程序 Bug）
 
-页面加载 / 定时器 / WebSocket 回调里**不会**自动调用 `requestPort()`。浏览器不支持 Web Serial 时，
-UI 直接提示「当前浏览器不支持 Web Serial，请使用最新版 Chrome / Edge，或者使用 Android / Electron 客户端」。
+没有已授权设备时 UI 提示「尚未授权串口设备，请点击『选择新串口设备』」，不会只留一个空下拉框；
+浏览器不支持 Web Serial（`'serial' in navigator === false`）时提示
+「当前浏览器不支持 Web Serial。请使用最新版桌面 Chrome / Edge，或使用 Android / Electron 客户端。」
+
+设备信息与型号识别：
+
+- 列表展示 `usbVendorId` / `usbProductId`（来自 `port.getInfo()`），CH340 常见 `VID 1A86`
+- 不强制 `PID=7523`：CH340/CH341 变体、克隆板、甚至浏览器未暴露 PID 时，
+  只要平台已识别为可用串口，都会使用「通用 USB 串口继电器（9600 8N1）」配置连接
+  （UI 会显示为通用配置，不谎称识别成 LCUS-1）
+- `navigator.serial` 的 `connect` / `disconnect` 事件用于刷新已授权设备状态；
+  注意 `connect` 事件不代表已获得首次授权，首次仍必须由用户点击触发 `requestPort()`
+
+物理拔出（Web Serial 生命周期）：
+
+- 事件回调读取 `event.port`（不是 `event.target`，后者是 `navigator.serial`）
+- 拔出的端口就是当前连接端口时，立即执行统一断连流程：
+  `physicalConnected=false` → 清理 writer（`abort` / `releaseLock`）→
+  `port.close()`（设备已拔出时允许抛错）→ 清空 `activePort` → 状态置为
+  `SERIAL_DEVICE_DISCONNECTED` → 通知 Provider / UI
+- 拔出的不是当前端口时只刷新设备列表，不影响当前连接
+- `getPorts()` 会一直返回「已授权但已拔出」的端口，因此每个端口额外带
+  `physicallyPresent` 标记：`false` 时 UI 显示「已拔出」并禁用「连接」，
+  重新插入（`connect` 事件）后清除标记，只有再次 `open()` 成功才回到 CONNECTED
+- 每次写入前二次校验 `activePort` / `writable`，写入过程中掉线会把状态置为
+  DISCONNECTED 并释放 writer 锁，`relayState` 保持 UNKNOWN，不产生成功事件
+
+失败指令与云端同步边界：
+
+- 串口未连接 / 已拔出时不写 USB、不上传任何 `relay_event`（避免无硬件却产生日志与广播）
+- 真正尝试过写入但失败时，才上传 `commandStatus=FAILED` 的审计事件
+  （`currentState` 与 `action` 一致以通过服务端校验），服务端不会更新 `relay_state`
 
 局域网 HTTP（如 `http://192.168.x.x:5173`）可能无法使用 Web Serial。这是浏览器安全限制，不是程序 Bug。
 
@@ -494,7 +537,7 @@ mvn clean package       # BUILD SUCCESS, JAR: server/target/usb-relay-cloud-serv
 ```powershell
 cd client
 npm run typecheck       # vue-tsc --noEmit
-npm test -- --run       # 76 tests
+npm test -- --run       # 125 tests
 npm run build           # vite build
 ```
 

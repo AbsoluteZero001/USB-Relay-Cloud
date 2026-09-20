@@ -231,7 +231,8 @@ export type CloudSyncStatus = "SUCCESS" | "FAILED" | "NOT_REQUIRED";
 
 export interface RelayExecutionResult {
   commandId: string;
-  deviceId: string;
+  /** 关联的云端设备 ID；null = 仅本地控制，未上传云端 */
+  deviceId: string | null;
   channel: number;
   commandedState: RelayStateValue;
   commandStatus: CommandStatus;

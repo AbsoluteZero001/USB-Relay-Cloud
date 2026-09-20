@@ -15,12 +15,17 @@ import type {CommandStatus, RelayStateValue,} from "@/types/api";
  * 任何非 CONNECTED 状态下，继电器控制滑块必须 disabled。
  */
 export type HardwareConnectionState =
+    /** 扫描完成但一个 USB 设备都没有 */
+    | "NO_DEVICE"
+    /** 曾经连接/选中过设备，但当前串口未打开 */
     | "DISCONNECTED"
     | "SCANNING"
+    /** UsbManager 已看到设备（可能尚未授权、尚未 open） */
     | "DETECTED"
     | "UNSUPPORTED"
     | "PERMISSION_REQUIRED"
     | "CONNECTING"
+    /** UsbDeviceConnection + SerialPort.open + 9600 8N1 全部成功 */
     | "CONNECTED"
     | "ERROR";
 
@@ -45,12 +50,14 @@ export interface HardwareStatus {
 
 export function hardwareStateLabel(state: HardwareConnectionState): string {
     switch (state) {
+        case "NO_DEVICE":
+            return "未检测到设备";
         case "DISCONNECTED":
-            return "未连接";
+            return "已断开";
         case "SCANNING":
             return "扫描中";
         case "DETECTED":
-            return "已检测";
+            return "已检测到设备";
         case "UNSUPPORTED":
             return "不受支持";
         case "PERMISSION_REQUIRED":

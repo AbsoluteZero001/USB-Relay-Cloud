@@ -5,7 +5,8 @@ import type {
 
 export interface RelayProviderCommand {
   eventId: string;
-  deviceId: string;
+  /** 关联的云端设备 ID；null 表示仅本地控制，不做云端同步。 */
+  deviceId: string | null;
   channel: number;
   action: RelayAction;
   previousState: RelayStateValue;
@@ -14,7 +15,7 @@ export interface RelayProviderCommand {
 
 export interface RelayProviderExecution {
   commandId: string;
-  deviceId: string;
+  deviceId: string | null;
   channel: number;
   action: RelayAction;
   previousState: RelayStateValue;

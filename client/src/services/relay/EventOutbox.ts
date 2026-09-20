@@ -1,4 +1,5 @@
 import {createRelayEvent} from "@/api/eventApi";
+import {ApiError} from "@/api/http";
 import type {RelayEventCreatePayload} from "@/types/api";
 
 /**
@@ -26,6 +27,8 @@ export interface OutboxFlushSummary {
     success: number;
     failed: number;
     remaining: number;
+    /** 被服务端永久拒绝（4xx）后丢弃的条目数 */
+    dropped: number;
 }
 
 export type OutboxStorage = {
@@ -93,18 +96,25 @@ export class EventOutbox {
             }
             let success = 0;
             let failed = 0;
+            let dropped = 0;
             const remaining: QueuedRelayEvent[] = [];
             for (const item of items) {
                 try {
                     await createRelayEvent(item.deviceId, item.payload);
                     success++;
                 } catch (error) {
+                    if (isPermanentlyRejected(error)) {
+                        // 服务端返回 4xx：重试多少次都不会成功（例如旧版本
+                        // 写入的非法 FAILED 事件），丢弃避免队列永久卡住。
+                        dropped++;
+                        continue;
+                    }
                     remaining.push(item);
                     failed++;
                 }
             }
             this.save(remaining);
-            return this.summary(success, failed, remaining.length);
+            return this.summary(success, failed, remaining.length, dropped);
         } finally {
             this.flushing = false;
         }
@@ -170,13 +180,29 @@ export class EventOutbox {
         success: number,
         failed: number,
         remaining?: number,
+        dropped = 0,
     ): OutboxFlushSummary {
         return {
             success,
             failed,
             remaining: remaining ?? this.size(),
+            dropped,
         };
     }
+}
+
+/**
+ * 服务端 4xx 表示请求本身不合法（不可重试）；
+ * 401/403/408/429 除外：它们可能通过重新登录或稍后重试恢复。
+ */
+function isPermanentlyRejected(error: unknown): boolean {
+    if (!(error instanceof ApiError) || error.status === null) {
+        return false;
+    }
+    if (error.status < 400 || error.status >= 500) {
+        return false;
+    }
+    return ![401, 403, 408, 429].includes(error.status);
 }
 
 function isQueuedRelayEvent(value: unknown): value is QueuedRelayEvent {

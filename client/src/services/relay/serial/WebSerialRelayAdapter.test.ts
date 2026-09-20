@@ -2,91 +2,48 @@ import {afterEach, beforeEach, describe, expect, it, vi} from "vitest";
 
 import {WebSerialRelayAdapter} from "./WebSerialRelayAdapter";
 import type {SerialDeviceChange} from "./types";
+import {
+    FakeSerialApi,
+    FakeSerialPort,
+    installSerialApi,
+    removeSerialApi,
+} from "@/test/fakes/webSerial";
 
-class FakeSerialPort {
-    opened = false;
-    readonly written: number[][] = [];
-
-    constructor(
-        private readonly vendorId?: number,
-        private readonly productId?: number,
-    ) {
-    }
-
-    getInfo(): {usbVendorId?: number; usbProductId?: number} {
-        return {
-            usbVendorId: this.vendorId,
-            usbProductId: this.productId,
-        };
-    }
-
-    async open(): Promise<void> {
-        this.opened = true;
-    }
-
-    async close(): Promise<void> {
-        this.opened = false;
-    }
-
-    get writable(): {getWriter: () => {
-        write: (data: Uint8Array) => Promise<void>;
-        releaseLock: () => void;
-    }} {
-        return {
-            getWriter: () => ({
-                write: async (data: Uint8Array) => {
-                    this.written.push(Array.from(data));
-                },
-                releaseLock: () => undefined,
-            }),
-        };
-    }
-}
-
-interface FakeSerialApi {
-    getPorts: ReturnType<typeof vi.fn>;
-    requestPort: ReturnType<typeof vi.fn>;
-    addEventListener: ReturnType<typeof vi.fn>;
-}
-
-let serial: FakeSerialApi | null = null;
-
-function installSerialApi(): FakeSerialApi {
-    const api: FakeSerialApi = {
-        getPorts: vi.fn().mockResolvedValue([]),
-        requestPort: vi.fn(),
-        addEventListener: vi.fn(),
-    };
-    serial = api;
-    Object.defineProperty(navigator, "serial", {
-        configurable: true,
-        value: api,
+async function connectedAdapter(
+    port: FakeSerialPort,
+    api: FakeSerialApi,
+): Promise<{adapter: WebSerialRelayAdapter; portId: string}> {
+    api.ports.push(port);
+    const adapter = new WebSerialRelayAdapter();
+    // 生产代码由 Provider 订阅状态后才注册 navigator.serial 监听
+    adapter.onStatusChange(() => undefined);
+    const [info] = await adapter.listPorts();
+    if (!info) throw new Error("expected a serial port");
+    await adapter.connect(info.port, {
+        baudRate: 9600,
+        dataBits: 8,
+        stopBits: 1,
+        parity: "none",
+        flowControl: "none",
     });
-    return api;
-}
-
-function removeSerialApi(): void {
-    serial = null;
-    delete (navigator as {serial?: unknown}).serial;
-}
-
-function asSerialPort(port: FakeSerialPort): SerialPort {
-    return port as unknown as SerialPort;
+    return {adapter, portId: info.port};
 }
 
 beforeEach(() => {
     installSerialApi();
+    vi.spyOn(console, "info").mockImplementation(() => undefined);
+    vi.spyOn(console, "warn").mockImplementation(() => undefined);
+    vi.spyOn(console, "error").mockImplementation(() => undefined);
 });
 
 afterEach(() => {
     removeSerialApi();
 });
 
-describe("WebSerialRelayAdapter", () => {
-    it("only lists previously granted ports and never auto-opens the picker", async () => {
+describe("WebSerialRelayAdapter 设备发现", () => {
+    it("getPorts() 只刷新已授权设备，绝不自动打开选择窗口", async () => {
         const api = installSerialApi();
-        const ch340 = new FakeSerialPort(0x1a86, 0x7523);
-        api.getPorts.mockResolvedValue([ch340]);
+        api.ports.push(new FakeSerialPort(0x1a86, 0x7523));
         const adapter = new WebSerialRelayAdapter();
 
         const ports = await adapter.listPorts();
@@ -99,14 +56,12 @@ describe("WebSerialRelayAdapter", () => {
             supported: true,
             hasPermission: true,
         });
-        // 规范要求：requestPort() 必须由明确的用户手势触发，禁止自动调用。
         expect(api.requestPort).not.toHaveBeenCalled();
     });
 
-    it("asks the browser for a device only when requestPort() is called", async () => {
+    it("只有 requestPort() 才触发浏览器选择窗口", async () => {
         const api = installSerialApi();
-        const ch340 = new FakeSerialPort(0x1a86, 0x7523);
-        api.requestPort.mockResolvedValue(ch340);
+        api.requestResult = new FakeSerialPort(0x1a86, 0x5523);
         const adapter = new WebSerialRelayAdapter();
 
         const port = await adapter.requestPort();
@@ -114,72 +69,159 @@ describe("WebSerialRelayAdapter", () => {
         expect(api.requestPort).toHaveBeenCalledTimes(1);
         expect(port).toMatchObject({
             vendorId: "1A86",
-            productId: "7523",
+            productId: "5523",
             description: "USB-SERIAL CH340",
         });
     });
 
-    it("connects with 9600 8N1 and writes the LCUS-1 bytes", async () => {
+    it("requestPort() 成功后设备进入已授权列表", async () => {
         const api = installSerialApi();
-        const ch340 = new FakeSerialPort(0x1a86, 0x7523);
-        api.getPorts.mockResolvedValue([ch340]);
+        const adapter = new WebSerialRelayAdapter();
+
+        const picked = await adapter.requestPort();
+        const granted = await adapter.listPorts();
+
+        expect(granted.map((port) => port.port)).toContain(picked.port);
+        expect(api.getPorts).toHaveBeenCalled();
+    });
+
+    it("浏览器不支持 Web Serial 时给出明确提示", async () => {
+        removeSerialApi();
+        const adapter = new WebSerialRelayAdapter();
+
+        expect(adapter.isSupported()).toBe(false);
+        await expect(adapter.listPorts()).rejects.toThrow(/不支持 Web Serial/);
+        await expect(adapter.requestPort()).rejects.toThrow(
+            /Android \/ Electron/,
+        );
+    });
+});
+
+describe("WebSerialRelayAdapter 物理拔出", () => {
+    it("disconnect(activePort) → DISCONNECTED 并清理资源", async () => {
+        const api = installSerialApi();
+        const port = new FakeSerialPort(0x1a86, 0x7523);
+        const {adapter} = await connectedAdapter(port, api);
+        expect(adapter.isPhysicallyConnected()).toBe(true);
+
+        port.unplug();
+        api.emit("disconnect", port);
+
+        const status = adapter.getStatus();
+        expect(status.connected).toBe(false);
+        expect(status.state).toBe("error");
+        expect(status.errorCode).toBe("SERIAL_DEVICE_DISCONNECTED");
+        expect(adapter.isPhysicallyConnected()).toBe(false);
+        // 允许 close() 抛错，但必须真的尝试关闭（清理是异步的）
+        await vi.waitFor(() => {
+            expect(port.closeAttempts).toBeGreaterThan(0);
+        });
+    });
+
+    it("拔出其他非 activePort 不影响当前连接", async () => {
+        const api = installSerialApi();
+        const active = new FakeSerialPort(0x1a86, 0x7523);
+        const other = new FakeSerialPort(0x1a86, 0x5523);
+        const {adapter} = await connectedAdapter(active, api);
+        api.ports.push(other);
+
+        other.unplug();
+        api.emit("disconnect", other);
+
+        expect(adapter.isPhysicallyConnected()).toBe(true);
+        expect(adapter.getStatus().connected).toBe(true);
+    });
+
+    it("拔出后 write 不再执行，抛「已断开」错误", async () => {
+        const api = installSerialApi();
+        const port = new FakeSerialPort(0x1a86, 0x7523);
+        const {adapter} = await connectedAdapter(port, api);
+
+        port.unplug();
+        api.emit("disconnect", port);
+
+        await expect(
+            adapter.send(new Uint8Array([0xa0, 0x01, 0x01, 0xa2])),
+        ).rejects.toThrow(/已断开/);
+        expect(port.writeAttempts).toEqual([]);
+    });
+
+    it("write 过程中物理断开 → 抛错、状态 DISCONNECTED、释放 writer 锁", async () => {
+        const api = installSerialApi();
+        const port = new FakeSerialPort(0x1a86, 0x7523);
+        const {adapter} = await connectedAdapter(port, api);
+        port.writeError = new DOMException(
+            "The device has been lost",
+            "NetworkError",
+        );
+
+        await expect(
+            adapter.send(new Uint8Array([0xa0, 0x01, 0x01, 0xa2])),
+        ).rejects.toThrow(/已断开/);
+
+        expect(port.writeAttempts).toEqual([[0xa0, 0x01, 0x01, 0xa2]]);
+        expect(adapter.getStatus()).toMatchObject({
+            connected: false,
+            errorCode: "SERIAL_DEVICE_DISCONNECTED",
+        });
+        expect(port.writerReleases).toBeGreaterThan(0);
+        expect(port.closeAttempts).toBeGreaterThan(0);
+    });
+
+    it("disconnect() 用户主动断开后状态为 disconnected 且锁被释放", async () => {
+        const api = installSerialApi();
+        const port = new FakeSerialPort(0x1a86, 0x7523);
+        const {adapter} = await connectedAdapter(port, api);
+        await adapter.send(new Uint8Array([0xa0, 0x01, 0x00, 0xa1]));
+
+        await adapter.disconnect();
+
+        expect(port.opened).toBe(false);
+        expect(adapter.getStatus()).toMatchObject({
+            state: "disconnected",
+            connected: false,
+        });
+        expect(port.writerReleases).toBeGreaterThan(0);
+        await expect(adapter.send(new Uint8Array([0xa0]))).rejects.toThrow(
+            /尚未连接/,
+        );
+    });
+
+    it("幽灵端口：物理不存在时 connect() 必须失败，不能变成 CONNECTED", async () => {
+        const api = installSerialApi();
+        const port = new FakeSerialPort(0x1a86, 0x7523);
+        api.ports.push(port);
         const adapter = new WebSerialRelayAdapter();
         const [info] = await adapter.listPorts();
         if (!info) throw new Error("expected a serial port");
+        port.unplug();
 
-        await adapter.connect(info.port, {
+        await expect(adapter.connect(info.port, {
             baudRate: 9600,
             dataBits: 8,
             stopBits: 1,
             parity: "none",
             flowControl: "none",
-        });
-        await adapter.send(new Uint8Array([0xa0, 0x01, 0x00, 0xa1]));
+        })).rejects.toThrow();
 
-        expect(ch340.opened).toBe(true);
-        expect(ch340.written).toEqual([[0xa0, 0x01, 0x00, 0xa1]]);
-        expect(adapter.getStatus()).toMatchObject({
-            state: "connected",
-            connected: true,
-        });
+        expect(adapter.getStatus().connected).toBe(false);
+        expect(adapter.isPhysicallyConnected()).toBe(false);
     });
 
-    it("reports a clear message when Web Serial is unavailable", async () => {
-        removeSerialApi();
-        const adapter = new WebSerialRelayAdapter();
-
-        expect(adapter.isSupported()).toBe(false);
-        await expect(adapter.listPorts()).rejects.toThrow(
-            /不支持 Web Serial/,
-        );
-        await expect(adapter.requestPort()).rejects.toThrow(
-            /Android \/ Electron/,
-        );
-    });
-
-    it("forwards browser connect/disconnect events", async () => {
+    it("插拔事件转发给上层（event.port 形式）", async () => {
         const api = installSerialApi();
-        const ch340 = new FakeSerialPort(0x1a86, 0x7523);
+        const port = new FakeSerialPort(0x1a86, 0x7523);
+        api.ports.push(port);
         const adapter = new WebSerialRelayAdapter();
         const changes: SerialDeviceChange[] = [];
         adapter.onDeviceChange((change) => changes.push(change));
-        api.getPorts.mockResolvedValue([ch340]);
-        await adapter.listPorts();
 
-        const handlers = new Map<string, (event: Event) => void>();
-        for (const call of api.addEventListener.mock.calls) {
-            handlers.set(call[0] as string, call[1] as (event: Event) => void);
-        }
-        expect(handlers.has("connect")).toBe(true);
-        expect(handlers.has("disconnect")).toBe(true);
+        api.emit("connect", port);
+        api.emit("disconnect", port);
 
-        handlers.get("connect")?.({target: asSerialPort(ch340)} as unknown as Event);
-        await vi.waitFor(() => {
-            expect(changes).toHaveLength(1);
-        });
-        expect(changes[0]).toMatchObject({
-            type: "attached",
-            port: {vendorId: "1A86"},
-        });
+        expect(changes.map((change) => change.type))
+            .toEqual(["attached", "detached"]);
+        expect(changes[0]?.port).toMatchObject({vendorId: "1A86"});
+        expect(changes[1]?.port).toMatchObject({vendorId: "1A86"});
     });
 });

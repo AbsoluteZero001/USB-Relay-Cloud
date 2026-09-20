@@ -53,6 +53,7 @@ class UsbRelayPlugin : Plugin() {
     private var errorCode: String? = null
     private var errorDetail: String? = null
     private var manualClose = false
+    private var lastLoggedState: String? = null
 
     private var pendingPermissionCall: PluginCall? = null
     private var pendingPermissionDeviceId: Int? = null
@@ -644,6 +645,16 @@ class UsbRelayPlugin : Plugin() {
     }
 
     private fun notifyStatus() {
+        // hardwareState 只在真正变化时打一条，便于和前端 canControl 日志对照
+        if (state != lastLoggedState) {
+            lastLoggedState = state
+            Log.i(
+                TAG,
+                "hardwareState=$state deviceId=$currentDeviceId " +
+                    "connected=${state == "connected" && port != null} " +
+                    "baudRate=$baudRate errorCode=$errorCode detail=$errorDetail",
+            )
+        }
         notifyListeners("statusChange", statusToObject())
     }
 

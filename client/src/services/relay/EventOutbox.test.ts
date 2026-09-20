@@ -1,6 +1,7 @@
 import {beforeEach, describe, expect, it, vi} from "vitest";
 
 import {EventOutbox, type OutboxStorage} from "./EventOutbox";
+import {ApiError} from "@/api/http";
 import type {RelayEventCreatePayload} from "@/types/api";
 
 // Mock createRelayEvent so tests don't touch the network.
@@ -135,6 +136,33 @@ describe("EventOutbox", () => {
         storage.setItem("test-outbox", "not-json{");
         expect(outbox.size()).toBe(0);
         outbox.enqueue("relay-001", makePayload("after-corrupt"));
+        expect(outbox.size()).toBe(1);
+    });
+
+    it("drops entries permanently rejected by the server (4xx) but keeps retryable ones", async () => {
+        // 例如旧版本写入的非法 FAILED 事件：服务端 400，重试永远不会成功
+        vi.mocked(createRelayEvent).mockRejectedValue(
+            new ApiError("invalid relay event", "INVALID_RELAY_EVENT", 400, null),
+        );
+        outbox.enqueue("relay-001", makePayload("bad"));
+
+        const summary = await outbox.flush();
+
+        expect(summary.dropped).toBe(1);
+        expect(summary.remaining).toBe(0);
+        expect(outbox.size()).toBe(0);
+
+        // 5xx / 网络错误仍然保留在队列里等待重试
+        vi.mocked(createRelayEvent).mockRejectedValue(
+            new ApiError("server error", "HTTP_ERROR", 500, null),
+        );
+        outbox.enqueue("relay-001", makePayload("retry-later"));
+
+        const second = await outbox.flush();
+
+        expect(second.dropped).toBe(0);
+        expect(second.failed).toBe(1);
+        expect(second.remaining).toBe(1);
         expect(outbox.size()).toBe(1);
     });
 });

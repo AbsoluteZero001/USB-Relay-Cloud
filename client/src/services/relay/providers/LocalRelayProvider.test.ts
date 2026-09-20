@@ -347,13 +347,20 @@ describe("LocalRelayProvider hardware gate", () => {
 
         adapter.simulateDetach();
 
+        // 拔出瞬间：适配器推送 SERIAL_DEVICE_DISCONNECTED，
+        // Provider 立即清空本地指令状态并禁止控制。
+        expect(provider.isHardwareConnected()).toBe(false);
+        expect(provider.getHardwareStatus().commandedState).toBe("UNKNOWN");
+        expect(provider.getStatus()).toMatchObject({
+            errorCode: "SERIAL_DEVICE_DISCONNECTED",
+        });
+
         // 拔出后 Provider 会自动重新扫描（异步），等待其完成。
         await vi.waitFor(() => {
             expect(provider.getHardwareStatus().lastPorts).toEqual([]);
         });
-        expect(provider.getHardwareStatus().state).toBe("DISCONNECTED");
-        expect(provider.getHardwareStatus().commandedState).toBe("UNKNOWN");
-        expect(provider.isHardwareConnected()).toBe(false);
+        // 重新扫描后一个设备都没有 → NO_DEVICE
+        expect(provider.getHardwareStatus().state).toBe("NO_DEVICE");
 
         await expect(provider.execute(command("OFF"))).rejects.toThrow(
             /未连接/,
@@ -373,7 +380,7 @@ describe("LocalRelayProvider hardware gate", () => {
 
         const empty = await provider.scanAndMatch();
         expect(empty).toEqual([]);
-        expect(provider.getHardwareStatus().state).toBe("DISCONNECTED");
+        expect(provider.getHardwareStatus().state).toBe("NO_DEVICE");
 
         adapter.simulateAttach();
 
