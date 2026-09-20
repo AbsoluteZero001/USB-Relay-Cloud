@@ -35,15 +35,27 @@ export function clearConfiguredServerBaseUrl(): void {
     }
 }
 
+/**
+ * 构建期烘焙的默认服务器地址（绝对 URL）。
+ * 仅用于未配置过服务器地址时的回退，例如 Android Debug APK 首次启动。
+ * 通过 Vite env VITE_DEFAULT_SERVER_BASE_URL 注入；不设置则回退到
+ * 原有的相对路径 VITE_API_BASE_URL（Nginx 同源部署）。
+ */
+function getDefaultServerBaseUrl(): string {
+    const value = import.meta.env.VITE_DEFAULT_SERVER_BASE_URL;
+    if (typeof value !== "string") return "";
+    return trimTrailingSlash(value.trim());
+}
+
 export function getApiBaseUrl(): string {
-    const serverBaseUrl = getConfiguredServerBaseUrl();
+    const serverBaseUrl = getConfiguredServerBaseUrl() || getDefaultServerBaseUrl();
     return serverBaseUrl
         ? `${serverBaseUrl}/api`
         : import.meta.env.VITE_API_BASE_URL;
 }
 
 export function getWebSocketBaseUrl(): string {
-    const serverBaseUrl = getConfiguredServerBaseUrl();
+    const serverBaseUrl = getConfiguredServerBaseUrl() || getDefaultServerBaseUrl();
     if (!serverBaseUrl) {
         return import.meta.env.VITE_WS_BASE_URL;
     }

@@ -4,6 +4,8 @@ interface ImportMetaEnv {
   readonly VITE_API_BASE_URL: string;
   readonly VITE_WS_BASE_URL: string;
   readonly VITE_APP_ENV?: string;
+    /** Debug/本地构建烘焙的默认服务器地址（绝对 URL），生产 Nginx 同源部署不设置。 */
+    readonly VITE_DEFAULT_SERVER_BASE_URL?: string;
 }
 
 interface ImportMeta {
