@@ -176,6 +176,20 @@ await expectUnauthorized("/devices");
 // 3. 建立 WS 并发送 AUTH 帧
 const socket = await openWebSocketWithAuth(token, 0);
 
+// 3.5 先 heartbeat 注册设备（设备不存在时由 ADMIN 自注册）
+await request(
+    `/devices/${deviceId}/heartbeat`,
+    token,
+    {
+        method: "POST",
+        body: JSON.stringify({
+            deviceName: deviceId,
+            deviceType: "USB_RELAY",
+            clientId: "android-tablet-001",
+        }),
+    },
+);
+
 // 4. 提交事件（Bearer），同时监听 WS 实时推送
 const pushed = waitForRelayMessage(socket, eventId);
 const payload = {

@@ -127,7 +127,20 @@ public class DeviceService {
             String deviceId,
             HeartbeatRequest request
     ) {
-        requireAccess(deviceId);
+        // 设备自注册：设备不存在时允许 ADMIN 创建；普通用户只能操作已有授权设备。
+        DeviceEntity existing = deviceMapper.selectByDeviceId(deviceId);
+        if (existing == null) {
+            AuthenticatedUser user = currentUserResolver.require();
+            if (!GlobalRole.ADMIN.name().equals(user.globalRole())) {
+                throw new ResourceNotFoundException(
+                        "device not found: " + deviceId
+                );
+            }
+            // ADMIN 放行，由 persistenceService.upsertActiveDevice 创建设备
+        } else {
+            requireAccess(deviceId);
+        }
+
         HeartbeatPersistenceResult result =
                 persistenceService.heartbeat(deviceId, request);
         DeviceResponse device = DeviceResponse.from(result.device());
