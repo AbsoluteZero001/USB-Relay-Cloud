@@ -2,6 +2,7 @@ import {createPinia, setActivePinia} from "pinia";
 import {beforeEach, describe, expect, it} from "vitest";
 
 import {LocalRelayProvider} from "./LocalRelayProvider";
+import {LCUS1_CH340_PROFILE} from "../hardware/HardwareProfile";
 import {useRelayStore} from "@/stores/relayStore";
 import type {RequestableSerialAdapter} from "../serial/SerialAdapter";
 import type {SerialOpenOptions, SerialPortInfo, SerialStatus,} from "../serial/types";
@@ -53,6 +54,8 @@ class FakeSerialAdapter implements RequestableSerialAdapter {
     readonly sent: number[][] = [];
     sendShouldFail = false;
     connectShouldFail = false;
+    /** 模拟 AndroidUsbRelayAdapter.requestPermission 在授权后推送瞬时 "disconnected"。 */
+    simulatePermissionTransient = false;
     private ports: SerialPortInfo[];
     private status: SerialStatus;
     private readonly listeners = new Set<(status: SerialStatus) => void>();
@@ -86,13 +89,26 @@ class FakeSerialAdapter implements RequestableSerialAdapter {
             throw new Error("连接失败");
         }
         this.status = {
-            state: "connected",
+            state: "connecting",
             port: portId,
             device: portId,
             baudRate: options.baudRate,
-            connected: true,
+            connected: false,
             errorCode: null,
             detail: null,
+        };
+        this.emit();
+        if (this.simulatePermissionTransient) {
+            this.status = {...this.status, state: "waiting_permission"};
+            this.emit();
+            // AndroidUsbRelayAdapter.requestPermission 授权后会推送一次瞬时 disconnected
+            this.status = {...this.status, state: "disconnected"};
+            this.emit();
+        }
+        this.status = {
+            ...this.status,
+            state: "connected",
+            connected: true,
         };
         this.emit();
   }
@@ -238,6 +254,27 @@ describe("LocalRelayProvider hardware gate", () => {
       hardwareState: "UNKNOWN",
     });
   });
+
+    // 回归：Android 授权流程会在 connect 中推送瞬时 "disconnected"，
+    // 旧实现据此清空 matchedProfile 导致永远无法进入 CONNECTED。
+    it("survives the transient disconnected emitted during Android permission", async () => {
+        const adapter = new FakeSerialAdapter();
+        adapter.simulatePermissionTransient = true;
+        const provider = new LocalRelayProvider(adapter);
+        provider.onHardwareStatusChange(() => {
+        });
+
+        await provider.scanAndMatch();
+        await provider.connect("1");
+
+        expect(provider.isHardwareConnected()).toBe(true);
+        expect(provider.getHardwareStatus().matchedProfile).toBe(
+            LCUS1_CH340_PROFILE,
+        );
+        // 即便瞬时 disconnected 触发过 recompute，仍可正常执行指令。
+        await provider.execute(command("ON"));
+        expect(adapter.sent).toEqual([[0xa0, 0x01, 0x01, 0xa2]]);
+    });
 
     // spec §13.4：CONNECTED + 写入失败 → FAILED，状态不变。
     it("keeps commandedState unchanged when write fails", async () => {

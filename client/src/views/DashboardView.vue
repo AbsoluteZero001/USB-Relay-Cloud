@@ -1,10 +1,12 @@
 <script setup lang="ts">
-import {ArrowRight, Cpu, RefreshCw, ScrollText,} from "@lucide/vue";
+import {ArrowRight, Cpu, RefreshCw, ScrollText} from "@lucide/vue";
 import {computed, onBeforeUnmount, onMounted, ref} from "vue";
 import {RouterLink} from "vue-router";
 
 import EventLogList from "@/components/EventLogList.vue";
+import HardwareInfoPanel from "@/components/HardwareInfoPanel.vue";
 import LocalRelayPanel from "@/components/LocalRelayPanel.vue";
+import RelayControlPanel from "@/components/RelayControlPanel.vue";
 import StatePanel from "@/components/StatePanel.vue";
 import {relayService} from "@/services/relay";
 import type {HardwareStatus} from "@/services/relay/hardware";
@@ -29,9 +31,6 @@ const selectedEvents = computed(() => {
   return eventStore.events.filter((event) => event.deviceId === deviceId);
 });
 
-// 本地硬件状态由 RelayService / LocalRelayProvider 维护，独立于云端 relay_state。
-// WebSocket 收到 RELAY_STATE_CHANGED 只会更新 relayStore.commandedState，
-// 不会改变本地 hardwareConnectionState（spec §12）。
 const hardwareStatus = ref<HardwareStatus>(relayService.getHardwareStatus());
 let unsubscribeHardware: (() => void) | null = null;
 
@@ -52,7 +51,6 @@ async function refresh(): Promise<void> {
 }
 
 function applyLocalResult(result: RelayExecutionResult): void {
-  // spec §4：云端事件回执优先；写入失败时不推进本地 commandedState。
   if (result.cloudEvent && eventStore.appendEvent(result.cloudEvent)) {
     relayStore.applyEvent(result.cloudEvent);
     return;
@@ -65,7 +63,6 @@ function applyLocalResult(result: RelayExecutionResult): void {
         "SUCCESS",
     );
   }
-  // FAILED：不更新 relayStore commandedState，UI 保持原状态。
 }
 
 onMounted(() => {
@@ -118,31 +115,34 @@ onBeforeUnmount(() => {
       </button>
     </section>
 
-    <div class="dashboard-grid">
+    <div class="dashboard-cards">
       <StatePanel
         :device="selectedDevice"
         :relay-state="relayState"
-        :hardware-status="hardwareStatus"
       />
       <LocalRelayPanel
+          :device-id="selectedDevice?.deviceId ?? null"
+        :hardware-status="hardwareStatus"
+      />
+      <RelayControlPanel
         :device-id="selectedDevice?.deviceId ?? null"
         :hardware-status="hardwareStatus"
         @completed="applyLocalResult"
       />
+      <HardwareInfoPanel :hardware-status="hardwareStatus"/>
     </div>
 
     <section class="data-panel">
       <div class="panel-heading">
         <div>
           <span class="section-kicker">实时历史</span>
-          <h2>最近事件</h2>
+          <h2>最近操作日志</h2>
         </div>
         <RouterLink class="text-link" to="/logs">
           查看全部日志
           <ArrowRight :size="15" />
         </RouterLink>
       </div>
-
       <EventLogList :events="selectedEvents" :limit="8" />
     </section>
 

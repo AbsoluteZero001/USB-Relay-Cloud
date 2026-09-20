@@ -72,9 +72,46 @@ export const LCUS1_CH340_PROFILE: RelayHardwareProfile = {
 /** 当前受支持的全部硬件配置，按优先级排列。 */
 export const SUPPORTED_PROFILES: RelayHardwareProfile[] = [LCUS1_CH340_PROFILE];
 
-function normalizeHex(value: string | null): string | null {
-    if (!value) return null;
-    return value.toUpperCase().padStart(4, "0");
+/**
+ * 将 USB vendorId / productId 统一规范化为大写 4 位十六进制字符串（如 "1A86"）。
+ *
+ * 接受以下输入：
+ * - number：当作十进制整数转换（6790 → "1A86"，29987 → "7523"）。
+ *   适用于某些原生桥把 VID 作为数字透传的场景。
+ * - 字符串 "0x1a86" / "0X1A86"：去除前缀后按十六进制处理。
+ * - 字符串 "1a86" / "1A86" / "7523"：按十六进制处理（适配器实际产物）。
+ *
+ * 注意：纯数字字符串（如 "7523"）按十六进制处理而不是十进制——
+ * 因为仓库内 AndroidUsbRelayAdapter / WebSerialRelayAdapter 产出的 PortInfo
+ * 始终是 hex4 字符串（"1A86"/"7523"），若把 "7523" 当十进制会错算成 "1D63"。
+ * 真正的十进制只在数值类型输入时出现。
+ */
+export function normalizeUsbId(value: unknown): string | null {
+    if (value == null) {
+        return null;
+    }
+    let hex: string;
+    if (typeof value === "number") {
+        if (!Number.isFinite(value) || value < 0) {
+            return null;
+        }
+        hex = Math.trunc(value).toString(16);
+    } else if (typeof value === "string") {
+        let trimmed = value.trim();
+        if (/^0x/i.test(trimmed)) {
+            trimmed = trimmed.slice(2);
+        }
+        if (trimmed.length === 0) {
+            return null;
+        }
+        hex = trimmed;
+    } else {
+        return null;
+    }
+    if (!/^[0-9a-fA-F]+$/.test(hex)) {
+        return null;
+    }
+    return hex.toUpperCase().padStart(4, "0");
 }
 
 /**
@@ -86,8 +123,8 @@ function normalizeHex(value: string | null): string | null {
 export function matchHardwareProfile(
     port: SerialPortInfo,
 ): RelayHardwareProfile | null {
-    const vid = normalizeHex(port.vendorId);
-    const pid = normalizeHex(port.productId);
+    const vid = normalizeUsbId(port.vendorId);
+    const pid = normalizeUsbId(port.productId);
     if (!vid || !pid) {
         return null;
     }

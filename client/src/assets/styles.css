@@ -259,6 +259,24 @@ h2 {
   background: var(--surface-soft);
 }
 
+.status-badge.info {
+    color: var(--info);
+    border-color: #c5dcee;
+    background: var(--info-soft);
+}
+
+.status-badge.warning {
+    color: var(--warning);
+    border-color: #ecdca8;
+    background: var(--warning-soft);
+}
+
+.status-badge.unknown {
+    color: var(--warning);
+    border-color: #ecdca8;
+    background: var(--warning-soft);
+}
+
 .page-stage {
   position: relative;
   width: min(1360px, 100%);
@@ -434,6 +452,7 @@ button:disabled {
 .state-panel,
 .local-panel,
 .data-panel,
+.panel-card,
 .filter-bar,
 .settings-section {
   border: 1px solid var(--line);
@@ -444,8 +463,21 @@ button:disabled {
 
 .state-panel,
 .local-panel,
-.data-panel {
+.data-panel,
+.panel-card {
   padding: 22px;
+}
+
+.panel-card-head {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 16px;
+    margin-bottom: 17px;
+}
+
+.panel-card-head h2 {
+    font-size: 18px;
 }
 
 .state-panel-head {
@@ -1093,4 +1125,317 @@ button:disabled {
     animation-duration: 0.01ms !important;
     animation-iteration-count: 1 !important;
   }
+}
+
+/* ===== V1 Dashboard 5-card layout ===== */
+
+.dashboard-cards {
+    display: grid;
+    grid-template-columns: 1fr;
+    gap: 18px;
+    margin-bottom: 18px;
+}
+
+@media (min-width: 900px) {
+    .dashboard-cards {
+        grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
+    }
+
+    .device-overview-card {
+        order: 2;
+    }
+
+    .usb-connection-card {
+        order: 1;
+    }
+
+    .relay-control-card {
+        order: 4;
+    }
+
+    .hardware-info-card {
+        order: 3;
+    }
+}
+
+/* 设备概览卡 */
+.overview-device {
+    display: grid;
+    gap: 3px;
+    margin-bottom: 16px;
+    padding: 14px 16px;
+    border: 1px solid #e0e7ea;
+    background: var(--surface-soft);
+    border-radius: 8px;
+}
+
+.overview-device strong {
+    font-size: 17px;
+}
+
+.overview-device-id {
+    color: var(--muted);
+    font-size: 12px;
+    font-family: monospace;
+}
+
+.overview-grid {
+    display: grid;
+    grid-template-columns: repeat(3, minmax(0, 1fr));
+    gap: 1px;
+    overflow: hidden;
+    border: 1px solid #e1e7ea;
+    background: #e1e7ea;
+    border-radius: 8px;
+}
+
+.overview-item {
+    min-width: 0;
+    padding: 14px;
+    background: #ffffff;
+}
+
+.overview-item dt {
+    color: var(--muted);
+    font-size: 11px;
+    font-weight: 700;
+    letter-spacing: 0.04em;
+    text-transform: uppercase;
+    margin-bottom: 7px;
+}
+
+.overview-value {
+    display: inline-flex;
+    align-items: center;
+    gap: 5px;
+    font-size: 14px;
+    font-weight: 800;
+}
+
+.overview-value.on,
+.overview-value.online,
+.overview-value.success {
+    color: var(--success);
+}
+
+.overview-value.off,
+.overview-value.offline {
+    color: var(--muted);
+}
+
+.overview-value.unknown {
+    color: var(--warning);
+}
+
+/* USB 连接卡 */
+.field-group-large {
+    margin-bottom: 16px;
+}
+
+.select-large {
+    min-height: 44px;
+    font-size: 14px;
+    padding: 0 12px;
+}
+
+.button-large {
+    min-height: 44px;
+    padding: 0 18px;
+    font-size: 14px;
+}
+
+.button-row-large {
+    gap: 12px;
+    margin-top: 16px;
+}
+
+.button-row-large .button {
+    flex: 1;
+}
+
+.param-grid {
+    display: grid;
+    grid-template-columns: repeat(3, minmax(0, 1fr));
+    gap: 1px;
+    overflow: hidden;
+    border: 1px solid #e1e7ea;
+    background: #e1e7ea;
+    border-radius: 8px;
+    margin: 14px 0;
+}
+
+.param-item {
+    min-width: 0;
+    padding: 12px;
+    background: #ffffff;
+}
+
+.param-item dt {
+    color: var(--muted);
+    font-size: 10px;
+    font-weight: 700;
+    letter-spacing: 0.04em;
+    text-transform: uppercase;
+    margin-bottom: 5px;
+}
+
+.param-item dd {
+    overflow-wrap: anywhere;
+    font-size: 13px;
+    font-weight: 700;
+}
+
+/* 继电器控制卡 */
+.relay-switch-row {
+    display: flex;
+    align-items: center;
+    gap: 1rem;
+    margin: 20px 0;
+}
+
+.relay-switch {
+    display: inline-flex;
+    align-items: center;
+    border: none;
+    background: transparent;
+    cursor: pointer;
+    padding: 0;
+}
+
+.relay-switch.disabled {
+    cursor: not-allowed;
+    opacity: 0.5;
+}
+
+.relay-switch-track {
+    width: 80px;
+    height: 40px;
+    border-radius: 999px;
+    background: var(--danger, #b43b3b);
+    position: relative;
+    transition: background 0.2s ease;
+    flex-shrink: 0;
+}
+
+.relay-switch.on .relay-switch-track {
+    background: var(--success, #157f55);
+}
+
+.relay-switch.disabled .relay-switch-track {
+    background: #c7ccd1;
+}
+
+.relay-switch-thumb {
+    position: absolute;
+    top: 4px;
+    left: 4px;
+    width: 32px;
+    height: 32px;
+    border-radius: 50%;
+    background: #fff;
+    box-shadow: 0 2px 4px rgba(0, 0, 0, 0.3);
+    transition: transform 0.2s ease;
+}
+
+.relay-switch.on .relay-switch-thumb {
+    transform: translateX(40px);
+}
+
+.relay-switch-label {
+    font-size: 28px;
+    font-weight: 800;
+    color: var(--muted);
+    min-width: 50px;
+}
+
+.relay-switch-label.on {
+    color: var(--success);
+}
+
+/* 硬件信息卡 */
+.info-grid {
+    display: grid;
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    gap: 1px;
+    overflow: hidden;
+    border: 1px solid #e1e7ea;
+    background: #e1e7ea;
+    border-radius: 8px;
+}
+
+.info-item {
+    min-width: 0;
+    padding: 14px;
+    background: #ffffff;
+}
+
+.info-item dt {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    color: var(--muted);
+    font-size: 11px;
+    font-weight: 700;
+    margin-bottom: 7px;
+}
+
+.info-value {
+    font-size: 14px;
+    font-weight: 800;
+}
+
+.info-value.success {
+    color: var(--success);
+}
+
+.info-value.unknown {
+    color: var(--warning);
+}
+
+.hardware-explain {
+    margin-top: 14px;
+    padding: 12px 14px;
+    border: 1px solid #e0e7ea;
+    background: var(--surface-soft);
+    border-radius: 8px;
+    line-height: 1.6;
+}
+
+/* 移动端适配 */
+@media (max-width: 720px) {
+    .panel-card {
+        padding: 17px;
+    }
+
+    .overview-grid {
+        grid-template-columns: 1fr;
+    }
+
+    .param-grid {
+        grid-template-columns: repeat(2, minmax(0, 1fr));
+    }
+
+    .info-grid {
+        grid-template-columns: 1fr;
+    }
+
+    .relay-switch-track {
+        width: 64px;
+        height: 32px;
+    }
+
+    .relay-switch-thumb {
+        width: 24px;
+        height: 24px;
+        top: 4px;
+        left: 4px;
+    }
+
+    .relay-switch.on .relay-switch-thumb {
+        transform: translateX(32px);
+    }
+
+    .relay-switch-label {
+        font-size: 22px;
+    }
 }

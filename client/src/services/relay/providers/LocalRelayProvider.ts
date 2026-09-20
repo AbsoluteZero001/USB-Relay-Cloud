@@ -354,10 +354,13 @@ export class LocalRelayProvider implements RelayProvider {
         }
         this.hardwareErrorCode = serial.errorCode;
         this.hardwareErrorDetail = serial.detail;
-        if (
-            next === "DISCONNECTED" &&
-            this.hardwareState !== "DISCONNECTED"
-        ) {
+        // 仅在“从 CONNECTED 真正断开 / 失联”时才重置本地指令状态与已匹配 profile。
+        // 连接流程中 AndroidUsbRelayAdapter.requestPermission 会在授权后推送一次瞬时
+        // "disconnected"（此时 hardwareState 仍是 CONNECTING），不属于“已连接后断开”，
+        // 绝不能清除 matchedProfile，否则后续 open 成功也无法进入 CONNECTED（历史 Bug）。
+        const wasConnected = this.hardwareState === "CONNECTED";
+        const nowTerminal = next === "DISCONNECTED" || next === "ERROR";
+        if (wasConnected && nowTerminal) {
             // USB 拔出或断开：重置本地指令状态。
             // 不修改云端 commandedState，不生成假的 OFF 事件。
             this.commandedState = "UNKNOWN";
