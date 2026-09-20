@@ -1,33 +1,32 @@
 <script setup lang="ts">
 import {Cloud, Cpu, HeartPulse, RotateCcw, Save, ShieldCheck, Usb, Wifi,} from "@lucide/vue";
 import {computed, reactive, ref} from "vue";
+import {useRouter} from "vue-router";
 
 import {connectionTestLabel, testServerConnection,} from "@/api/healthApi";
 import {getApiErrorMessage} from "@/api/http";
-import {
-  clearConfiguredServerBaseUrl,
-  getApiBaseUrl,
-  getConfiguredServerBaseUrl,
-  getWebSocketBaseUrl,
-  saveConfiguredServerBaseUrl,
-} from "@/config/runtimeConfig";
 import {relayService} from "@/services/relay";
 import {relayWebSocket} from "@/services/websocket";
+import {useAuthStore} from "@/stores/authStore";
 import {useConnectionStore} from "@/stores/connectionStore";
 import {useDeviceStore} from "@/stores/deviceStore";
 import {useEventStore} from "@/stores/eventStore";
+import {useServerConfigStore} from "@/stores/serverConfigStore";
 import {webSocketStatusLabel} from "@/utils/format";
 
+const router = useRouter();
+const authStore = useAuthStore();
 const connectionStore = useConnectionStore();
 const deviceStore = useDeviceStore();
 const eventStore = useEventStore();
+const serverConfig = useServerConfigStore();
 const runtime = relayService.getRuntime();
 const saving = ref(false);
 const testing = ref(false);
 const message = ref<string | null>(null);
 const error = ref<string | null>(null);
 const configVersion = ref(0);
-const serverBaseUrl = ref(getConfiguredServerBaseUrl());
+const serverBaseUrl = ref(serverConfig.effectiveServerBaseUrl);
 const form = reactive({
   deviceId: "relay-001",
   deviceName: "Relay-001",
@@ -37,16 +36,21 @@ const form = reactive({
 
 const apiBaseUrl = computed(() => {
   void configVersion.value;
-  return getApiBaseUrl();
+  return serverConfig.apiBaseUrl;
 });
 const wsBaseUrl = computed(() => {
   void configVersion.value;
-  return getWebSocketBaseUrl();
+  return serverConfig.wsBaseUrl;
 });
 
-function reconnectRealtime(): void {
+/**
+ * 当服务器地址发生变化时，旧 token 对新服务器无效。
+ * 清除 token、断开 WebSocket，回到登录页。
+ */
+function handleServerChanged(): void {
   relayWebSocket.disconnect();
-  relayWebSocket.connect(eventStore.latestSequence);
+  authStore.logout();
+  void router.replace("/login");
 }
 
 async function saveServerAddress(): Promise<void> {
@@ -54,10 +58,17 @@ async function saveServerAddress(): Promise<void> {
   message.value = null;
   error.value = null;
   try {
-    serverBaseUrl.value =
-        saveConfiguredServerBaseUrl(serverBaseUrl.value);
+    const oldUrl = serverConfig.effectiveServerBaseUrl;
+    serverBaseUrl.value = serverConfig.setServerBaseUrl(serverBaseUrl.value);
     configVersion.value += 1;
-    reconnectRealtime();
+    if (oldUrl !== serverBaseUrl.value) {
+      // 服务器已更换：清 token、断 WS、回登录页。
+      handleServerChanged();
+      return;
+    }
+    // 地址未变，仅重连实时通道。
+    relayWebSocket.disconnect();
+    relayWebSocket.connect(eventStore.latestSequence);
     await deviceStore.loadDevices();
     message.value = "服务器地址已保存，实时连接正在重新建立";
   } catch (caught) {
@@ -68,10 +79,16 @@ async function saveServerAddress(): Promise<void> {
 }
 
 async function restoreDefaultServerAddress(): Promise<void> {
-  clearConfiguredServerBaseUrl();
-  serverBaseUrl.value = "";
+  const oldUrl = serverConfig.effectiveServerBaseUrl;
+  serverConfig.resetServerBaseUrl();
+  serverBaseUrl.value = serverConfig.effectiveServerBaseUrl;
   configVersion.value += 1;
-  reconnectRealtime();
+  if (oldUrl !== serverBaseUrl.value) {
+    handleServerChanged();
+    return;
+  }
+  relayWebSocket.disconnect();
+  relayWebSocket.connect(eventStore.latestSequence);
   await deviceStore.loadDevices();
   message.value = "已恢复构建时的默认服务器地址";
 }

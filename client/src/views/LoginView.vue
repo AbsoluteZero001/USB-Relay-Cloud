@@ -2,10 +2,11 @@
 import {computed, ref, watch} from "vue";
 import {useRouter} from "vue-router";
 
-import {getApiErrorMessage} from "@/api/http";
+import {getApiErrorMessage, isNetworkUnreachableError} from "@/api/http";
 import {useAuthStore} from "@/stores/authStore";
 import {useConnectionStore} from "@/stores/connectionStore";
 import {useDeviceStore} from "@/stores/deviceStore";
+import {useServerConfigStore} from "@/stores/serverConfigStore";
 
 type LoginStage =
     | "idle"
@@ -40,6 +41,7 @@ const STAGE_LABEL: Record<Exclude<LoginStage, "idle">, string> = {
 const authStore = useAuthStore();
 const connectionStore = useConnectionStore();
 const deviceStore = useDeviceStore();
+const serverConfig = useServerConfigStore();
 const router = useRouter();
 
 const username = ref("");
@@ -47,6 +49,9 @@ const password = ref("");
 const inProgress = ref(false);
 const errorMessage = ref<string | null>(null);
 const stage = ref<LoginStage>("idle");
+
+// 是否为网络不可达类错误（用于显示“检查服务器设置”入口）。
+const isNetworkError = ref(false);
 
 const progressPercent = computed(() => STAGE_PERCENT[stage.value]);
 const progressLabel = computed(() =>
@@ -136,6 +141,7 @@ async function handleSubmit(): Promise<void> {
   stage.value = "idle";
   inProgress.value = true;
   errorMessage.value = null;
+  isNetworkError.value = false;
   redirectTarget =
       (router.currentRoute.value.query.redirect as string | undefined) ?? "/";
   advanceStage("authenticating");
@@ -145,9 +151,14 @@ async function handleSubmit(): Promise<void> {
     // 后续阶段由上面的真实状态监听推进，此处不做任何时间驱动的假进度。
   } catch (error) {
     // 停止在真实失败阶段，保留真实错误原因，允许重新登录。
+    isNetworkError.value = isNetworkUnreachableError(error);
     errorMessage.value = getApiErrorMessage(error);
     inProgress.value = false;
   }
+}
+
+function goToServerSettings(): void {
+  router.push("/server-settings");
 }
 </script>
 
@@ -207,11 +218,28 @@ async function handleSubmit(): Promise<void> {
       </p>
 
       <button
+          v-if="isNetworkError"
+          type="button"
+          class="login__server-link"
+          @click="goToServerSettings"
+      >
+        检查服务器设置 →
+      </button>
+
+      <button
           type="submit"
           class="login__submit"
           :disabled="inProgress"
       >
         {{ inProgress ? "登录中…" : "登录" }}
+      </button>
+
+      <button
+          type="button"
+          class="login__server-settings"
+          @click="goToServerSettings"
+      >
+        ⚙ 服务器设置
       </button>
     </form>
   </main>
@@ -339,5 +367,36 @@ async function handleSubmit(): Promise<void> {
 .login__submit:disabled {
   background: #93c5fd;
   cursor: not-allowed;
+}
+
+.login__server-link {
+  background: none;
+  border: none;
+  color: #2563eb;
+  font-size: 0.85rem;
+  cursor: pointer;
+  padding: 0;
+  text-decoration: underline;
+  text-underline-offset: 2px;
+}
+
+.login__server-link:hover {
+  color: #1d4ed8;
+}
+
+.login__server-settings {
+  background: none;
+  border: none;
+  color: #6b7280;
+  font-size: 0.85rem;
+  cursor: pointer;
+  padding: 0.25rem;
+  border-radius: 6px;
+  transition: color 0.15s ease, background 0.15s ease;
+}
+
+.login__server-settings:hover {
+  color: #374151;
+  background: #f3f4f6;
 }
 </style>

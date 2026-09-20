@@ -40,6 +40,22 @@ http.interceptors.request.use((config) => {
     return config;
 });
 
+/**
+ * 判断是否为网络层错误（无响应）。
+ * 401/403 等认证错误属于“有响应”的业务错误，不算网络不可达。
+ */
+function isNetworkUnreachable(error: AxiosError<unknown>): boolean {
+    return (
+        !error.response &&
+        (error.code === "ERR_NETWORK" ||
+            error.code === "ECONNREFUSED" ||
+            error.code === "ENOTFOUND" ||
+            error.code === "ECONNABORTED" ||
+            error.code === "ETIMEDOUT" ||
+            error.code === "ERR_CONNECTION_TIMED_OUT")
+    );
+}
+
 function readErrorResponse(error: AxiosError<ApiResponse<unknown>>): ApiError {
   const response = error.response;
   const payload = response?.data;
@@ -51,6 +67,14 @@ function readErrorResponse(error: AxiosError<ApiResponse<unknown>>): ApiError {
       payload.data ?? null,
     );
   }
+    // 无响应：网络不可达 / DNS / 超时 / SSL 等
+    if (isNetworkUnreachable(error)) {
+        return new ApiError(
+            "无法连接服务器，请检查服务器地址或网络连接。",
+            "NETWORK_UNREACHABLE",
+            null,
+        );
+    }
   return new ApiError(
     error.message || "网络请求失败",
     "NETWORK_ERROR",
@@ -113,4 +137,21 @@ export function getApiErrorMessage(error: unknown): string {
     return error.message;
   }
   return error instanceof Error ? error.message : "请求失败";
+}
+
+/**
+ * 判断错误是否为网络不可达类错误（无 HTTP 响应）。
+ * 用于登录页区分“服务器连接问题”与“认证失败”。
+ */
+export function isNetworkUnreachableError(error: unknown): boolean {
+    if (error instanceof ApiError) {
+        return (
+            error.code === "NETWORK_UNREACHABLE" ||
+            error.code === "NETWORK_ERROR"
+        );
+    }
+    if (axios.isAxiosError(error)) {
+        return isNetworkUnreachable(error);
+    }
+    return false;
 }

@@ -12,6 +12,12 @@ const router = createRouter({
         meta: {title: "登录", public: true},
     },
       {
+          path: "/server-settings",
+          name: "server-settings",
+          component: () => import("@/views/ServerSettingsView.vue"),
+          meta: {title: "服务器设置", public: true},
+      },
+      {
       path: "/",
       name: "dashboard",
       component: () => import("@/views/DashboardView.vue"),

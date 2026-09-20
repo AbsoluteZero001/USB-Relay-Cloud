@@ -4,7 +4,7 @@ function trimTrailingSlash(value: string): string {
     return value.replace(/\/+$/, "");
 }
 
-function normalizeServerBaseUrl(value: string): string {
+export function normalizeServerBaseUrl(value: string): string {
     const normalized = trimTrailingSlash(value.trim());
     if (!normalized) return "";
     const url = new URL(normalized);
@@ -41,7 +41,7 @@ export function clearConfiguredServerBaseUrl(): void {
  * 通过 Vite env VITE_DEFAULT_SERVER_BASE_URL 注入；不设置则回退到
  * 原有的相对路径 VITE_API_BASE_URL（Nginx 同源部署）。
  */
-function getDefaultServerBaseUrl(): string {
+export function getDefaultServerBaseUrl(): string {
     const value = import.meta.env.VITE_DEFAULT_SERVER_BASE_URL;
     if (typeof value !== "string") return "";
     return trimTrailingSlash(value.trim());
